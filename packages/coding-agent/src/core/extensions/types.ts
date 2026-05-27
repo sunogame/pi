@@ -1601,6 +1601,18 @@ export interface ExtensionShortcut {
 	extensionPath: string;
 }
 
+export interface TuiExtensionShortcut {
+	shortcut: KeyId;
+	description?: string;
+	handler: (ctx: TuiExtensionContext) => Promise<void> | void;
+	extensionPath: string;
+}
+
+export interface TuiWidgetRegistration {
+	content: string[] | ExtensionWidgetFactory;
+	options?: ExtensionWidgetOptions;
+}
+
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 
 export type SendMessageHandler = <T = unknown>(
@@ -1662,6 +1674,7 @@ export interface ExtensionRuntimeState {
 	 */
 	registerProvider: (name: string, config: ProviderConfig, extensionPath?: string) => void;
 	unregisterProvider: (name: string, extensionPath?: string) => void;
+	emitExtensionEvent: (namespace: string, payload: unknown) => void;
 }
 
 /**
@@ -1683,6 +1696,7 @@ export interface ExtensionActions {
 	setModel: SetModelHandler;
 	getThinkingLevel: GetThinkingLevelHandler;
 	setThinkingLevel: SetThinkingLevelHandler;
+	emitExtensionEvent: (namespace: string, payload: unknown) => void;
 }
 
 /**
@@ -1746,6 +1760,15 @@ export interface Extension {
 	commands: Map<string, RegisteredCommand>;
 	flags: Map<string, ExtensionFlag>;
 	shortcuts: Map<KeyId, ExtensionShortcut>;
+	tuiHandlers?: Map<string, HandlerFn[]>;
+	tuiCommands?: Map<string, TuiRegisteredCommand>;
+	tuiShortcuts?: Map<KeyId, TuiExtensionShortcut>;
+	tuiMessageRenderers?: Map<string, MessageRenderer>;
+	tuiWidgets?: Map<string, TuiWidgetRegistration>;
+	tuiFooterFactory?: ExtensionFooterFactory;
+	tuiHeaderFactory?: ExtensionHeaderFactory;
+	tuiAutocompleteProviders?: AutocompleteProviderFactory[];
+	tuiEditorFactory?: EditorFactory;
 }
 
 /** Result of loading extensions. */

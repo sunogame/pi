@@ -166,7 +166,9 @@ export type {
 	TuiExtensionContext,
 	TuiExtensionFactory,
 	TuiExtensionHandler,
+	TuiExtensionShortcut,
 	TuiRegisteredCommand,
+	TuiWidgetRegistration,
 	TurnEndEvent,
 	TurnStartEvent,
 	// Events - User Bash

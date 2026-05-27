@@ -35,11 +35,17 @@ import type {
 	ExtensionManifest,
 	ExtensionPlacement,
 	ExtensionRuntime,
+	ExtensionWidgetFactory,
 	LoadExtensionsResult,
 	MessageRenderer,
 	ProviderConfig,
 	RegisteredCommand,
+	RuntimeExtensionAPI,
+	RuntimeExtensionFactory,
 	ToolDefinition,
+	TuiExtensionAPI,
+	TuiExtensionFactory,
+	TuiRegisteredCommand,
 } from "./types.ts";
 
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
@@ -123,8 +129,14 @@ interface ExtensionModule {
 	default?: ExtensionFactory;
 	manifest?: ExtensionManifest;
 	placement?: Exclude<ExtensionPlacement, "legacy">;
-	runtime?: ExtensionFactory;
-	tui?: ExtensionFactory;
+	runtime?: RuntimeExtensionFactory;
+	tui?: TuiExtensionFactory;
+}
+
+function appendHandler(target: Map<string, HandlerFn[]>, event: string, handler: HandlerFn): void {
+	const list = target.get(event) ?? [];
+	list.push(handler);
+	target.set(event, list);
 }
 
 /**
@@ -174,6 +186,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		unregisterProvider: (name) => {
 			runtime.pendingProviderRegistrations = runtime.pendingProviderRegistrations.filter((r) => r.name !== name);
 		},
+		emitExtensionEvent: notInitialized,
 	};
 
 	return runtime;
@@ -194,9 +207,7 @@ function createExtensionAPI(
 		// Registration methods - write to extension
 		on(event: string, handler: HandlerFn): void {
 			runtime.assertActive();
-			const list = extension.handlers.get(event) ?? [];
-			list.push(handler);
-			extension.handlers.set(event, list);
+			appendHandler(extension.handlers, event, handler);
 		},
 
 		registerTool(tool: ToolDefinition): void {
@@ -332,8 +343,69 @@ function createExtensionAPI(
 			runtime.unregisterProvider(name, extension.path);
 		},
 
+		emitExtensionEvent(namespace: string, payload: unknown): void {
+			runtime.assertActive();
+			runtime.emitExtensionEvent(namespace, payload);
+		},
+
 		events: eventBus,
 	} as ExtensionAPI;
+
+	return api;
+}
+
+function createTuiExtensionAPI(extension: Extension): TuiExtensionAPI {
+	const api = {
+		on(event: string, handler: HandlerFn): void {
+			extension.tuiHandlers ??= new Map();
+			appendHandler(extension.tuiHandlers, event, handler);
+		},
+
+		registerCommand(name: string, options: Omit<TuiRegisteredCommand, "name" | "sourceInfo">): void {
+			extension.tuiCommands ??= new Map();
+			extension.tuiCommands.set(name, {
+				name,
+				sourceInfo: extension.sourceInfo,
+				...options,
+			});
+		},
+
+		registerShortcut(shortcut, options): void {
+			extension.tuiShortcuts ??= new Map();
+			extension.tuiShortcuts.set(shortcut, { shortcut, extensionPath: extension.path, ...options });
+		},
+
+		setWidget(key: string, content: string[] | ExtensionWidgetFactory | undefined, options): void {
+			extension.tuiWidgets ??= new Map();
+			if (content === undefined) {
+				extension.tuiWidgets.delete(key);
+				return;
+			}
+			extension.tuiWidgets.set(key, { content, options });
+		},
+
+		setFooter(factory): void {
+			extension.tuiFooterFactory = factory;
+		},
+
+		setHeader(factory): void {
+			extension.tuiHeaderFactory = factory;
+		},
+
+		registerMessageRenderer<T>(customType: string, renderer: MessageRenderer<T>): void {
+			extension.tuiMessageRenderers ??= new Map();
+			extension.tuiMessageRenderers.set(customType, renderer as MessageRenderer);
+		},
+
+		addAutocompleteProvider(factory): void {
+			extension.tuiAutocompleteProviders ??= [];
+			extension.tuiAutocompleteProviders.push(factory);
+		},
+
+		setEditorFactory(factory): void {
+			extension.tuiEditorFactory = factory;
+		},
+	} as TuiExtensionAPI;
 
 	return api;
 }
@@ -393,6 +465,12 @@ function createExtension(
 		commands: new Map(),
 		flags: new Map(),
 		shortcuts: new Map(),
+		tuiHandlers: new Map(),
+		tuiCommands: new Map(),
+		tuiShortcuts: new Map(),
+		tuiMessageRenderers: new Map(),
+		tuiWidgets: new Map(),
+		tuiAutocompleteProviders: [],
 	};
 }
 
@@ -407,20 +485,28 @@ async function loadExtension(
 	try {
 		const module = await loadExtensionModule(resolvedPath);
 		const placement = resolveExtensionPlacement(module, module.default);
-		const factory =
+		const runtimeFactory =
 			placement === "both"
 				? (module.runtime ?? module.default)
-				: placement === "tui"
-					? (module.tui ?? module.default)
-					: module.default;
-		if (typeof factory !== "function") {
+				: placement === "runtime" || placement === "legacy"
+					? module.default
+					: undefined;
+		const tuiFactory = placement === "both" || placement === "tui" ? (module.tui ?? module.default) : undefined;
+		if (typeof runtimeFactory !== "function" && typeof tuiFactory !== "function") {
 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
 		}
 
 		const extension = createExtension(extensionPath, resolvedPath, placement);
-		const api = createExtensionAPI(extension, runtime, cwd, eventBus);
-		if (placement !== "tui") {
-			await factory(api);
+		if (runtimeFactory) {
+			const runtimeApi = createExtensionAPI(extension, runtime, cwd, eventBus);
+			if (placement === "legacy") {
+				await (runtimeFactory as ExtensionFactory)(runtimeApi);
+			} else {
+				await (runtimeFactory as RuntimeExtensionFactory)(runtimeApi as unknown as RuntimeExtensionAPI);
+			}
+		}
+		if (tuiFactory) {
+			await (tuiFactory as TuiExtensionFactory)(createTuiExtensionAPI(extension));
 		}
 
 		return { extension, error: null };

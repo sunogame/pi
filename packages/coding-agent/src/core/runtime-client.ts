@@ -206,7 +206,10 @@ export class InProcessRuntimeClient implements RuntimeClient {
 	}
 
 	async bindUI(bindings: ExtensionBindings): Promise<void> {
-		await this.runtime.session.bindExtensions(bindings);
+		await this.runtime.session.bindExtensions({
+			...bindings,
+			emitExtensionEvent: (namespace, payload) => this.runtime.emitExtensionRuntimeEvent(namespace, payload),
+		});
 		this.refreshFromRuntime();
 	}
 

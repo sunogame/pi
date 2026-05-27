@@ -190,6 +190,7 @@ export interface ExtensionBindings {
 	abortHandler?: () => void;
 	shutdownHandler?: ShutdownHandler;
 	onError?: ExtensionErrorListener;
+	emitExtensionEvent?: (namespace: string, payload: unknown) => void;
 }
 
 /** Options for AgentSession.prompt() */
@@ -302,6 +303,7 @@ export class AgentSession {
 	private _extensionAbortHandler?: () => void;
 	private _extensionShutdownHandler?: ShutdownHandler;
 	private _extensionErrorListener?: ExtensionErrorListener;
+	private _extensionEventEmitter?: (namespace: string, payload: unknown) => void;
 	private _extensionErrorUnsubscriber?: () => void;
 
 	// Model registry for API key resolution
@@ -2070,6 +2072,9 @@ export class AgentSession {
 		if (bindings.onError !== undefined) {
 			this._extensionErrorListener = bindings.onError;
 		}
+		if (bindings.emitExtensionEvent !== undefined) {
+			this._extensionEventEmitter = bindings.emitExtensionEvent;
+		}
 
 		this._applyExtensionBindings(this._extensionRunner);
 		await this._extensionRunner.emit(this._sessionStartEvent);
@@ -2082,6 +2087,7 @@ export class AgentSession {
 		this._extensionAbortHandler = undefined;
 		this._extensionShutdownHandler = undefined;
 		this._extensionErrorListener = undefined;
+		this._extensionEventEmitter = undefined;
 		this._applyExtensionBindings(this._extensionRunner);
 	}
 
@@ -2232,6 +2238,9 @@ export class AgentSession {
 				},
 				getThinkingLevel: () => this.thinkingLevel,
 				setThinkingLevel: (level) => this.setThinkingLevel(level),
+				emitExtensionEvent: (namespace, payload) => {
+					this._extensionEventEmitter?.(namespace, payload);
+				},
 			},
 			{
 				getModel: () => this.model,

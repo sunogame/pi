@@ -506,6 +506,9 @@ describe("extensions discovery", () => {
 				export const placement = "tui";
 				export function tui(pi) {
 					pi.registerCommand("tui-command", { handler: async () => {} });
+					pi.registerShortcut("ctrl+u", { handler: async () => {} });
+					pi.registerMessageRenderer("tui-message", () => undefined);
+					pi.setWidget("tui-widget", ["hello"]);
 				}
 			`,
 		);
@@ -518,6 +521,7 @@ describe("extensions discovery", () => {
 				}
 				export function tui(pi) {
 					pi.registerCommand("both-tui-command", { handler: async () => {} });
+					pi.registerMessageRenderer("both-tui-message", () => undefined);
 				}
 			`,
 		);
@@ -531,7 +535,17 @@ describe("extensions discovery", () => {
 		expect(result.runtimeExtensions?.map((extension) => extension.placement).sort()).toEqual(["both", "runtime"]);
 		expect(result.tuiExtensions?.map((extension) => extension.placement).sort()).toEqual(["both", "tui"]);
 		expect(result.legacyExtensions?.map((extension) => extension.placement)).toEqual(["legacy"]);
-		expect(result.tuiExtensions?.find((extension) => extension.placement === "tui")?.commands.size).toBe(0);
+		const tuiExtension = result.tuiExtensions?.find((extension) => extension.placement === "tui");
+		expect(tuiExtension?.commands.size).toBe(0);
+		expect(tuiExtension?.tuiCommands?.has("tui-command")).toBe(true);
+		expect(tuiExtension?.tuiShortcuts?.has("ctrl+u")).toBe(true);
+		expect(tuiExtension?.tuiMessageRenderers?.has("tui-message")).toBe(true);
+		expect(tuiExtension?.tuiWidgets?.has("tui-widget")).toBe(true);
+		const bothExtension = result.tuiExtensions?.find((extension) => extension.placement === "both");
+		expect(bothExtension?.commands.has("both-runtime-command")).toBe(true);
+		expect(bothExtension?.commands.has("both-tui-command")).toBe(false);
+		expect(bothExtension?.tuiCommands?.has("both-tui-command")).toBe(true);
+		expect(bothExtension?.tuiMessageRenderers?.has("both-tui-message")).toBe(true);
 		expect(result.extensions.some((extension) => extension.placement === "tui")).toBe(false);
 	});
 });
