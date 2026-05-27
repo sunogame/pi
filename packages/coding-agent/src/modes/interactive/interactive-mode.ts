@@ -80,7 +80,7 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
-import { createInProcessRuntimeClient, type RuntimeClient } from "../../core/runtime-client.ts";
+import { createInProcessRuntimeClient, type LocalRuntimeClient } from "../../core/runtime-client.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { buildSessionContext, type SessionContext, SessionManager } from "../../core/session-manager.ts";
 import type { SettingsManager } from "../../core/settings-manager.ts";
@@ -240,7 +240,7 @@ export interface InteractiveModeOptions {
 
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
-	private runtimeClient: RuntimeClient;
+	private runtimeClient: LocalRuntimeClient;
 	private tuiExtensionRunner = new TuiExtensionRunner([]);
 	private settingsManager: SettingsManager;
 	private ui: TUI;
@@ -2799,6 +2799,10 @@ export class InteractiveMode {
 			case "queue_changed":
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
+				break;
+
+			case "commands_changed":
+				this.setupAutocompleteProvider();
 				break;
 
 			case "session_changed":

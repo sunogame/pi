@@ -18,6 +18,21 @@ The target model is closer to `tmux`:
 - the same protocol should work in-process, over a local socket, and later over
   a remote transport.
 
+## Phase Map
+
+- **Phase 1 - Runtime Attach Core:** complete. Defines runtime snapshots,
+  ordered runtime events, attach/replay semantics, the projector, and the
+  in-process runtime client/store.
+- **Phase 2 - Extension Boundary:** complete. Splits extensions into
+  `runtime`, `tui`, `both`, and `legacy` placement so TUI component factories
+  and runtime internals do not cross the future IPC boundary. See
+  [Phase 2 Extension Boundary](./phase-2-extension-boundary.md).
+- **Phase 3 - Single Runtime IPC:** in progress. Runs one agent runtime outside
+  the TUI process and attaches a TUI client to it. The protocol baseline is
+  defined in [Runtime IPC Protocol](./runtime-ipc-protocol.md).
+- **Phase 4 - Supervisor / Multi Runtime:** planned. Adds a supervisor, runtime
+  discovery, multi-agent attach switching, and service discovery.
+
 ## Process Model
 
 Local mode can start with all runtimes in one process:
@@ -200,6 +215,7 @@ type AgentRuntimeEvent =
   | { id: number; type: "tool_update"; toolCallId: string; patch: Partial<ToolExecutionSnapshot> }
   | { id: number; type: "tool_end"; tool: ToolExecutionSnapshot }
   | { id: number; type: "queue_changed"; pendingUserMessages: PendingUserMessage[] }
+  | { id: number; type: "commands_changed"; commands: RuntimeCommandSnapshot[] }
   | { id: number; type: "approval_requested"; approval: PendingApprovalSnapshot }
   | { id: number; type: "approval_resolved"; approvalId: string }
   | { id: number; type: "input_required"; input: InputRequiredSnapshot }
@@ -275,7 +291,7 @@ Event hooks also have placement:
 If a TUI extension needs a low-level runtime hook, it should be split and the
 runtime half should forward semantic updates with `extension_event`.
 
-See [Extension Placement 2c](./extension-placement-2c.md) for the migration
+See [Phase 2 Extension Boundary](./phase-2-extension-boundary.md) for the migration
 plan, compatibility policy, and completion criteria.
 
 ## Runtime Client
@@ -297,56 +313,23 @@ The store must cover all current TUI synchronous reads:
 - `diagnostics` for resource and extension load issues;
 - `config` for queue modes, auto-compaction, and scoped models.
 
-RuntimeClient command surface includes prompt control and session lifecycle:
+The IPC-safe `RuntimeClient` baseline is intentionally small:
 
 ```ts
 interface RuntimeClient {
   attach(options?: { lastSeenEventId?: number }): Promise<AttachResult>;
-  bindUI(bindings: ExtensionBindings): Promise<void>;
-  unbindUI(): Promise<void>;
   prompt(text: string, options?: unknown): Promise<void>;
   abort(): Promise<void>;
   waitForIdle(): Promise<void>;
-  newSession(options?: unknown): Promise<{ cancelled: boolean }>;
-  switchSession(path: string, options?: unknown): Promise<{ cancelled: boolean }>;
-  fork(entryId: string, options?: unknown): Promise<{ cancelled: boolean; selectedText?: string }>;
-  importFromJsonl(path: string, cwdOverride?: string): Promise<{ cancelled: boolean }>;
-  setModel(model: Model<any>): Promise<void>; // in-process only; IPC uses stable model refs.
-  cycleModel(direction?: "forward" | "backward"): Promise<ModelCycleResult | undefined>;
-  setThinkingLevel(level: ThinkingLevel): Promise<void>;
-  cycleThinkingLevel(): Promise<ThinkingLevel | undefined>;
-  setAutoCompactionEnabled(enabled: boolean): Promise<void>;
-  setSteeringMode(mode: "all" | "one-at-a-time"): Promise<void>;
-  setFollowUpMode(mode: "all" | "one-at-a-time"): Promise<void>;
-  setTransport(transport: Transport): Promise<void>; // in-process only; IPC uses stable transport refs.
-  setScopedModels(scopedModels: ScopedModel[]): Promise<void>;
-  clearQueue(): Promise<{ steering: string[]; followUp: string[] }>;
-  steer(text: string, images?: ImageContent[]): Promise<void>;
-  followUp(text: string, images?: ImageContent[]): Promise<void>;
-  compact(customInstructions?: string): Promise<CompactionResult>;
-  abortCompaction(): Promise<void>;
-  abortRetry(): Promise<void>;
-  abortBranchSummary(): Promise<void>;
-  reload(): Promise<void>;
-  exportToJsonl(outputPath?: string): Promise<string>;
-  exportToHtml(outputPath?: string): Promise<string>;
-  getLastAssistantText(): Promise<string | undefined>;
-  setSessionName(name: string): Promise<void>;
-  getSessionStats(): Promise<SessionStats>;
-  getUserMessagesForForking(): Promise<Array<{ entryId: string; text: string }>>;
-  abortBash(): Promise<void>;
-  executeBash(command: string, onChunk?: (chunk: string) => void, options?: BashOptions): Promise<BashResult>;
-  recordBashResult(command: string, result: BashResult, options?: { excludeFromContext?: boolean }): Promise<void>;
-  getSessionTree(): Promise<SessionTreeNode[]>;
-  navigateTree(targetId: string, options?: NavigateTreeOptions): Promise<NavigateTreeResult>;
-  getToolDefinition(name: string): Promise<ToolDefinition | undefined>;
-  setLabel(entryId: string, label: string | undefined): Promise<void>;
+  executeCommand(name: string, args: string): Promise<boolean>;
 }
 ```
 
-The first implementation is `InProcessRuntimeClient`, which delegates to the
-current `AgentSessionRuntime`. The later `IpcRuntimeClient` uses the same
-interface over a transport.
+`LocalRuntimeClient` extends this with process-local controls such as `bindUI`,
+raw `Model<any>` selection, `Transport` object mutation, legacy extension
+command context injection, and full tool definitions. Phase 3 IPC clients must
+not pretend to support those methods until protocol-specific serializable APIs
+exist.
 
 ## Import Boundary
 

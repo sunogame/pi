@@ -38,11 +38,20 @@ export interface RuntimeClient {
 	readonly store: AgentRuntimeStore;
 	attach(options?: RuntimeClientAttachOptions): Promise<AgentRuntimeAttachResult>;
 	detach(): void;
-	bindUI(bindings: ExtensionBindings): Promise<void>;
-	unbindUI(): Promise<void>;
 	prompt(text: string, options?: PromptOptions): Promise<void>;
 	abort(): Promise<void>;
 	waitForIdle(): Promise<void>;
+	executeCommand(name: string, args: string): Promise<boolean>;
+}
+
+/**
+ * Full in-process runtime control surface. Methods here may carry local
+ * objects, callbacks, or process-local UI bindings and are not part of the
+ * Phase 3 IPC baseline unless separately promoted by protocol docs.
+ */
+export interface LocalRuntimeClient extends RuntimeClient {
+	bindUI(bindings: ExtensionBindings): Promise<void>;
+	unbindUI(): Promise<void>;
 	newSession(options?: RuntimeNewSessionOptions): Promise<{ cancelled: boolean }>;
 	switchSession(sessionPath: string, options?: RuntimeSwitchSessionOptions): Promise<{ cancelled: boolean }>;
 	fork(entryId: string, options?: RuntimeForkOptions): Promise<{ cancelled: boolean; selectedText?: string }>;
@@ -87,7 +96,6 @@ export interface RuntimeClient {
 	navigateTree(targetId: string, options?: RuntimeNavigateTreeOptions): Promise<RuntimeNavigateTreeResult>;
 	getToolDefinition(name: string): Promise<ToolDefinition | undefined>;
 	setLabel(entryId: string, label: string | undefined): Promise<void>;
-	executeCommand(name: string, args: string): Promise<boolean>;
 }
 
 export type AgentRuntimeStoreListener = (snapshot: AgentRuntimeSnapshot, event?: AgentRuntimeEvent) => void;
@@ -141,7 +149,7 @@ export class AgentRuntimeStore {
 	}
 }
 
-export class InProcessRuntimeClient implements RuntimeClient {
+export class InProcessRuntimeClient implements LocalRuntimeClient {
 	readonly store: AgentRuntimeStore;
 	private readonly runtime: AgentSessionRuntime;
 	private unsubscribeAttach?: () => void;
@@ -511,6 +519,8 @@ function applyRuntimeEvent(snapshot: AgentRuntimeSnapshot, event: AgentRuntimeEv
 			};
 		case "queue_changed":
 			return { ...next, run: { ...next.run, pendingUserMessages: event.pendingUserMessages } };
+		case "commands_changed":
+			return { ...next, commands: event.commands };
 		case "approval_requested":
 			return {
 				...next,

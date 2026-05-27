@@ -18,7 +18,16 @@ export interface AgentRuntimeIdentity {
 	agentLabel?: string;
 }
 
-export type AgentRuntimeCapability = "event_replay" | "extension_events" | "input_required" | "approval" | string;
+export type AgentRuntimeCapability =
+	| "event_replay"
+	| "extension_events"
+	| "runtime_commands"
+	| "prompt"
+	| "abort"
+	| "input_required"
+	| "approval"
+	| string;
+export type RuntimeCommandPlacement = "runtime" | "legacy";
 
 export interface AgentIdentitySnapshot {
 	agentId: string;
@@ -124,8 +133,8 @@ export interface RuntimeCommandSnapshot {
 	name: string;
 	invocationName: string;
 	description?: string;
-	source: "runtime";
-	placement: "runtime";
+	source: RuntimeCommandPlacement;
+	placement: RuntimeCommandPlacement;
 	sourceInfo: SourceInfo;
 }
 
@@ -155,6 +164,7 @@ export type AgentRuntimeEvent =
 	| { id: number; type: "tool_update"; toolCallId: string; patch: Partial<ToolExecutionSnapshot> }
 	| { id: number; type: "tool_end"; tool: ToolExecutionSnapshot }
 	| { id: number; type: "queue_changed"; pendingUserMessages: PendingUserMessageSnapshot[] }
+	| { id: number; type: "commands_changed"; commands: RuntimeCommandSnapshot[] }
 	| { id: number; type: "approval_requested"; approval: PendingApprovalSnapshot }
 	| { id: number; type: "approval_resolved"; approvalId: string }
 	| { id: number; type: "input_required"; input: InputRequiredSnapshot }
@@ -320,8 +330,8 @@ function commandsSnapshot(session: AgentSession): RuntimeCommandSnapshot[] {
 		name: command.name,
 		invocationName: command.invocationName,
 		description: command.description,
-		source: "runtime",
-		placement: "runtime",
+		source: command.placement ?? "legacy",
+		placement: command.placement ?? "legacy",
 		sourceInfo: command.sourceInfo,
 	}));
 }
@@ -348,7 +358,13 @@ export class AgentRuntimeSnapshotProjector {
 			agentLabel: options.identity?.agentLabel,
 		};
 		this.maxEventLogEntries = options.eventLogLimit ?? 2000;
-		this.capabilities = options.capabilities ?? ["event_replay", "extension_events"];
+		this.capabilities = options.capabilities ?? [
+			"event_replay",
+			"extension_events",
+			"runtime_commands",
+			"prompt",
+			"abort",
+		];
 		this.status = statusFromSession(session);
 		this.subscribeToSession(session);
 	}
@@ -362,6 +378,7 @@ export class AgentRuntimeSnapshotProjector {
 		this.status = statusFromSession(session);
 		this.subscribeToSession(session);
 		this.emit({ type: "session_changed", session: sessionSnapshot(session) });
+		this.emit({ type: "commands_changed", commands: commandsSnapshot(session) });
 		if (previousStatus !== this.status) {
 			this.emit({ type: "status_changed", status: this.status });
 		}
@@ -530,6 +547,9 @@ export class AgentRuntimeSnapshotProjector {
 			}
 			case "queue_update":
 				this.emit({ type: "queue_changed", pendingUserMessages: pendingUserMessages(this.session) });
+				break;
+			case "commands_changed":
+				this.emit({ type: "commands_changed", commands: commandsSnapshot(this.session) });
 				break;
 			case "transcript_changed":
 				this.emit({ type: "transcript_changed", reason: event.reason });

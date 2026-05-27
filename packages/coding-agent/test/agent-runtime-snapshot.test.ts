@@ -243,13 +243,42 @@ describe("Agent runtime snapshot", () => {
 			});
 		}) as unknown as ExtensionFactory & { placement: "runtime" };
 		commandExtension.placement = "runtime";
-		const { runtimeHost } = await createRuntimeHost({ extensionFactories: [commandExtension] });
+		const legacyExtension = ((pi) => {
+			pi.registerCommand("legacy-mark", {
+				handler: async () => {},
+			});
+		}) satisfies ExtensionFactory;
+		const { runtimeHost } = await createRuntimeHost({ extensionFactories: [commandExtension, legacyExtension] });
 		const client = createInProcessRuntimeClient(runtimeHost);
 
-		expect(client.store.snapshot.commands.map((command) => command.name)).toContain("mark");
+		expect(client.store.snapshot.commands.map((command) => [command.name, command.placement])).toEqual([
+			["mark", "runtime"],
+			["legacy-mark", "legacy"],
+		]);
 		await expect(client.executeCommand("mark", "hello")).resolves.toBe(true);
 		await expect(client.executeCommand("missing", "")).resolves.toBe(false);
 		expect(calls).toEqual(["hello"]);
+	});
+
+	it("emits commands_changed when runtime commands are rebuilt", async () => {
+		const commandExtension = ((pi: RuntimeExtensionAPI) => {
+			pi.runtime.registerCommand("mark", { handler: async () => {} });
+		}) as unknown as ExtensionFactory & { placement: "runtime" };
+		commandExtension.placement = "runtime";
+		const { runtimeHost } = await createRuntimeHost({ extensionFactories: [commandExtension] });
+		const events: AgentRuntimeEvent[] = [];
+		const unsubscribe = runtimeHost.subscribeRuntimeEvents((event) => {
+			events.push(event);
+		});
+
+		await runtimeHost.session.reload();
+		unsubscribe();
+
+		expect(events.some((event) => event.type === "commands_changed")).toBe(true);
+		expect(events.find((event) => event.type === "commands_changed")).toMatchObject({
+			type: "commands_changed",
+			commands: [{ name: "mark", placement: "runtime" }],
+		});
 	});
 
 	it("loads the session tree lazily through the in-process runtime client", async () => {

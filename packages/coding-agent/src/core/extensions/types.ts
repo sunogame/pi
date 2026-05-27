@@ -1138,6 +1138,7 @@ export type MessageRenderer<T = unknown> = (
 export interface RegisteredCommand {
 	name: string;
 	sourceInfo: SourceInfo;
+	placement?: Extract<ExtensionPlacement, "runtime" | "legacy">;
 	description?: string;
 	getArgumentCompletions?: (argumentPrefix: string) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 	handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
@@ -1231,7 +1232,7 @@ export interface ExtensionAPI {
 	// =========================================================================
 
 	/** Register a custom command. */
-	registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void;
+	registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo" | "placement">): void;
 
 	/** Register a keyboard shortcut. */
 	registerShortcut(
@@ -1466,7 +1467,7 @@ export interface RuntimeExtensionAPI
 	on(event: "tool_result", handler: RuntimeExtensionHandler<ToolResultEvent, ToolResultEventResult>): void;
 	on(event: "user_bash", handler: RuntimeExtensionHandler<UserBashEvent, UserBashEventResult>): void;
 
-	registerCommand(name: string, options: Omit<RuntimeRegisteredCommand, "name" | "sourceInfo">): void;
+	registerCommand(name: string, options: Omit<RuntimeRegisteredCommand, "name" | "sourceInfo" | "placement">): void;
 	emitExtensionEvent(namespace: string, payload: unknown): void;
 }
 
@@ -1480,7 +1481,7 @@ export interface TuiExtensionAPI {
 	on(event: "runtime_event", handler: TuiExtensionHandler<AgentRuntimeEvent>): void;
 	on(event: "input", handler: TuiExtensionHandler<InputEvent, InputEventResult>): void;
 
-	registerCommand(name: string, options: Omit<TuiRegisteredCommand, "name" | "sourceInfo">): void;
+	registerCommand(name: string, options: Omit<TuiRegisteredCommand, "name" | "sourceInfo" | "placement">): void;
 	registerShortcut(
 		shortcut: KeyId,
 		options: {

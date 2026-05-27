@@ -219,12 +219,13 @@ function createExtensionAPI(
 			runtime.refreshTools();
 		},
 
-		registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void {
+		registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo" | "placement">): void {
 			runtime.assertActive();
 			extension.commands.set(name, {
 				name,
 				sourceInfo: extension.sourceInfo,
 				...options,
+				placement: extension.placement === "runtime" ? "runtime" : "legacy",
 			});
 		},
 
@@ -363,7 +364,7 @@ function createTuiExtensionAPI(extension: Extension): TuiExtensionAPI {
 			appendHandler(extension.tuiHandlers, event, handler);
 		},
 
-		registerCommand(name: string, options: Omit<TuiRegisteredCommand, "name" | "sourceInfo">): void {
+		registerCommand(name: string, options: Omit<TuiRegisteredCommand, "name" | "sourceInfo" | "placement">): void {
 			extension.tuiCommands ??= new Map();
 			extension.tuiCommands.set(name, {
 				name,
@@ -489,13 +490,25 @@ async function loadExtension(
 	try {
 		const module = await loadExtensionModule(resolvedPath);
 		const placement = resolveExtensionPlacement(module, module.default);
+		if (placement === "tui" && typeof module.tui !== "function") {
+			return {
+				extension: null,
+				error: `TUI extension must export a tui(pi) factory: ${extensionPath}`,
+			};
+		}
+		if (placement === "both" && typeof module.tui !== "function") {
+			return {
+				extension: null,
+				error: `Split extension must export a tui(pi) factory: ${extensionPath}`,
+			};
+		}
 		const runtimeFactory =
 			placement === "both"
 				? (module.runtime ?? module.default)
 				: placement === "runtime" || placement === "legacy"
 					? module.default
 					: undefined;
-		const tuiFactory = placement === "both" || placement === "tui" ? (module.tui ?? module.default) : undefined;
+		const tuiFactory = placement === "both" || placement === "tui" ? module.tui : undefined;
 		if (typeof runtimeFactory !== "function" && typeof tuiFactory !== "function") {
 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
 		}

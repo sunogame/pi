@@ -1,4 +1,4 @@
-# Extension Placement 2c
+# Phase 2 Extension Boundary
 
 This document defines the extension split required before the runtime/TUI
 boundary can move out of process.
@@ -179,8 +179,8 @@ Command discovery should become protocol state:
 interface RuntimeCommandSnapshot {
   name: string;
   description?: string;
-  source: "runtime" | "tui";
-  placement: "runtime" | "tui";
+  source: "runtime" | "legacy";
+  placement: "runtime" | "legacy";
 }
 ```
 
@@ -267,11 +267,11 @@ Those are later stages.
 - at least one integration test proves runtime placement, TUI placement, and a
   split `both` extension are routed correctly.
 
-## Stage 2 API Gaps
+## Phase 3 API Gaps
 
 2c removes typed `AgentSession` ownership from `InteractiveMode`, but a few
 legacy in-process reads remain intentionally behind a compatibility accessor
-until Stage 2 defines stable IPC APIs for them:
+until Phase 3 defines stable IPC APIs for them:
 
 - model selection and provider login/logout still need a model/auth protocol
   that can serialize model references, provider auth status, OAuth flows, and
@@ -286,6 +286,6 @@ until Stage 2 defines stable IPC APIs for them:
   because the current `ToolsSnapshot` intentionally exposes only metadata safe
   for display.
 
-These are Stage 2 transport/interface tasks, not extension placement tasks.
+These are Phase 3 transport/interface tasks, not extension placement tasks.
 They should be removed before `InteractiveMode` runs against a remote
 `IpcRuntimeClient`.

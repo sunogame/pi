@@ -579,4 +579,36 @@ describe("extensions discovery", () => {
 		expect(globals.__piRuntimeEventTypes).toEqual(["extension_event"]);
 		expect(result.extensions.some((extension) => extension.placement === "tui")).toBe(false);
 	});
+
+	it("requires an explicit tui export for tui and both placements", async () => {
+		const tuiPath = path.join(tempDir, "bad-tui.ts");
+		const bothPath = path.join(tempDir, "bad-both.ts");
+		fs.writeFileSync(
+			tuiPath,
+			`
+				export const placement = "tui";
+				export default function(pi) {
+					pi.registerCommand("legacy-shape", { handler: async () => {} });
+				}
+			`,
+		);
+		fs.writeFileSync(
+			bothPath,
+			`
+				export const placement = "both";
+				export default function(pi) {
+					pi.registerCommand("runtime-default", { handler: async () => {} });
+				}
+			`,
+		);
+
+		const { loadExtensions } = await import("../src/core/extensions/loader.ts");
+		const result = await loadExtensions([tuiPath, bothPath], tempDir);
+
+		expect(result.extensions).toHaveLength(0);
+		expect(result.errors.map((error) => error.error).sort()).toEqual([
+			`Split extension must export a tui(pi) factory: ${bothPath}`,
+			`TUI extension must export a tui(pi) factory: ${tuiPath}`,
+		]);
+	});
 });

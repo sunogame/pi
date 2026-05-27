@@ -214,6 +214,7 @@ export {
 	type AgentRuntimeStoreListener,
 	createInProcessRuntimeClient,
 	InProcessRuntimeClient,
+	type LocalRuntimeClient,
 	type RuntimeClient,
 	type RuntimeClientAttachOptions,
 	type RuntimeForkOptions,

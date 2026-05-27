@@ -135,6 +135,7 @@ export type AgentSessionEvent =
 	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
+	| { type: "commands_changed" }
 	| { type: "transcript_changed"; reason: "append" }
 	| {
 			type: "compaction_end";
@@ -2457,6 +2458,7 @@ export class AgentSession {
 			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
 			await this.extendResourcesFromExtensions("reload");
 		}
+		this._emit({ type: "commands_changed" });
 	}
 
 	// =========================================================================
