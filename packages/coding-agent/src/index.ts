@@ -238,6 +238,7 @@ export {
 	type RuntimeIpcResponse,
 	type RuntimeIpcResult,
 } from "./core/runtime-ipc.ts";
+export { createRuntimeIpcServer, RuntimeIpcServer } from "./core/runtime-ipc-server.ts";
 export {
 	createStreamRuntimeTransport,
 	type RuntimeTransport,
