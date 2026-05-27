@@ -397,7 +397,22 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		const extensionsResult = await loadExtensions(extensionPaths, this.cwd, this.eventBus);
 		const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);
-		extensionsResult.extensions.push(...inlineExtensions.extensions);
+		for (const extension of inlineExtensions.extensions) {
+			const placement = extension.placement ?? "legacy";
+			if (placement === "runtime" || placement === "both" || placement === "legacy") {
+				extensionsResult.extensions.push(extension);
+			}
+			if (placement === "runtime") {
+				extensionsResult.runtimeExtensions?.push(extension);
+			} else if (placement === "tui") {
+				extensionsResult.tuiExtensions?.push(extension);
+			} else if (placement === "both") {
+				extensionsResult.runtimeExtensions?.push(extension);
+				extensionsResult.tuiExtensions?.push(extension);
+			} else {
+				extensionsResult.legacyExtensions?.push(extension);
+			}
+		}
 		extensionsResult.errors.push(...inlineExtensions.errors);
 
 		// Detect extension conflicts (tools, commands, flags with same names from different extensions)

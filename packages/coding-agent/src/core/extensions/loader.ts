@@ -32,6 +32,8 @@ import type {
 	Extension,
 	ExtensionAPI,
 	ExtensionFactory,
+	ExtensionManifest,
+	ExtensionPlacement,
 	ExtensionRuntime,
 	LoadExtensionsResult,
 	MessageRenderer,
@@ -116,6 +118,14 @@ function getAliases(): Record<string, string> {
 }
 
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
+
+interface ExtensionModule {
+	default?: ExtensionFactory;
+	manifest?: ExtensionManifest;
+	placement?: Exclude<ExtensionPlacement, "legacy">;
+	runtime?: ExtensionFactory;
+	tui?: ExtensionFactory;
+}
 
 /**
  * Create a runtime with throwing stubs for action methods.
@@ -328,7 +338,18 @@ function createExtensionAPI(
 	return api;
 }
 
-async function loadExtensionModule(extensionPath: string) {
+function isExtensionPlacement(value: unknown): value is Exclude<ExtensionPlacement, "legacy"> {
+	return value === "runtime" || value === "tui" || value === "both";
+}
+
+function resolveExtensionPlacement(module: ExtensionModule, factory?: ExtensionFactory): ExtensionPlacement {
+	const factoryPlacement =
+		factory && "placement" in factory ? (factory as ExtensionFactory & { placement?: unknown }).placement : undefined;
+	const placement = module.manifest?.placement ?? module.placement ?? factoryPlacement;
+	return isExtensionPlacement(placement) ? placement : "legacy";
+}
+
+async function loadExtensionModule(extensionPath: string): Promise<ExtensionModule> {
 	const jiti = createJiti(import.meta.url, {
 		moduleCache: false,
 		// In Bun binary: use virtualModules for bundled packages (no filesystem resolution)
@@ -337,15 +358,24 @@ async function loadExtensionModule(extensionPath: string) {
 		...(isBunBinary ? { virtualModules: VIRTUAL_MODULES, tryNative: false } : { alias: getAliases() }),
 	});
 
-	const module = await jiti.import(extensionPath, { default: true });
-	const factory = module as ExtensionFactory;
-	return typeof factory !== "function" ? undefined : factory;
+	const module = await jiti.import(extensionPath);
+	if (typeof module === "function") {
+		return { default: module as ExtensionFactory };
+	}
+	if (!module || typeof module !== "object") {
+		return {};
+	}
+	return module as ExtensionModule;
 }
 
 /**
  * Create an Extension object with empty collections.
  */
-function createExtension(extensionPath: string, resolvedPath: string): Extension {
+function createExtension(
+	extensionPath: string,
+	resolvedPath: string,
+	placement: ExtensionPlacement = "legacy",
+): Extension {
 	const source =
 		extensionPath.startsWith("<") && extensionPath.endsWith(">")
 			? extensionPath.slice(1, -1).split(":")[0] || "temporary"
@@ -356,7 +386,7 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		path: extensionPath,
 		resolvedPath,
 		sourceInfo: createSyntheticSourceInfo(extensionPath, { source, baseDir }),
-		placement: "legacy",
+		placement,
 		handlers: new Map(),
 		tools: new Map(),
 		messageRenderers: new Map(),
@@ -375,14 +405,23 @@ async function loadExtension(
 	const resolvedPath = resolvePath(extensionPath, cwd, { normalizeUnicodeSpaces: true });
 
 	try {
-		const factory = await loadExtensionModule(resolvedPath);
-		if (!factory) {
+		const module = await loadExtensionModule(resolvedPath);
+		const placement = resolveExtensionPlacement(module, module.default);
+		const factory =
+			placement === "both"
+				? (module.runtime ?? module.default)
+				: placement === "tui"
+					? (module.tui ?? module.default)
+					: module.default;
+		if (typeof factory !== "function") {
 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
 		}
 
-		const extension = createExtension(extensionPath, resolvedPath);
+		const extension = createExtension(extensionPath, resolvedPath, placement);
 		const api = createExtensionAPI(extension, runtime, cwd, eventBus);
-		await factory(api);
+		if (placement !== "tui") {
+			await factory(api);
+		}
 
 		return { extension, error: null };
 	} catch (err) {
@@ -401,41 +440,66 @@ export async function loadExtensionFromFactory(
 	runtime: ExtensionRuntime,
 	extensionPath = "<inline>",
 ): Promise<Extension> {
-	const extension = createExtension(extensionPath, extensionPath);
+	const placement = resolveExtensionPlacement({}, factory);
+	const extension = createExtension(extensionPath, extensionPath, placement);
 	const resolvedCwd = resolvePath(cwd);
 	const api = createExtensionAPI(extension, runtime, resolvedCwd, eventBus);
-	await factory(api);
+	if (placement !== "tui") {
+		await factory(api);
+	}
 	return extension;
+}
+
+function addExtensionToLoadResult(result: LoadExtensionsResult, extension: Extension): void {
+	switch (extension.placement ?? "legacy") {
+		case "runtime":
+			result.runtimeExtensions?.push(extension);
+			result.extensions.push(extension);
+			break;
+		case "tui":
+			result.tuiExtensions?.push(extension);
+			break;
+		case "both":
+			result.runtimeExtensions?.push(extension);
+			result.tuiExtensions?.push(extension);
+			result.extensions.push(extension);
+			break;
+		case "legacy":
+			result.legacyExtensions?.push(extension);
+			result.extensions.push(extension);
+			break;
+	}
 }
 
 /**
  * Load extensions from paths.
  */
 export async function loadExtensions(paths: string[], cwd: string, eventBus?: EventBus): Promise<LoadExtensionsResult> {
-	const extensions: Extension[] = [];
-	const errors: Array<{ path: string; error: string }> = [];
 	const resolvedCwd = resolvePath(cwd);
 	const resolvedEventBus = eventBus ?? createEventBus();
-	const runtime = createExtensionRuntime();
+	const result: LoadExtensionsResult = {
+		extensions: [],
+		runtimeExtensions: [],
+		tuiExtensions: [],
+		legacyExtensions: [],
+		errors: [],
+		runtime: createExtensionRuntime(),
+	};
 
 	for (const extPath of paths) {
-		const { extension, error } = await loadExtension(extPath, resolvedCwd, resolvedEventBus, runtime);
+		const { extension, error } = await loadExtension(extPath, resolvedCwd, resolvedEventBus, result.runtime);
 
 		if (error) {
-			errors.push({ path: extPath, error });
+			result.errors.push({ path: extPath, error });
 			continue;
 		}
 
 		if (extension) {
-			extensions.push(extension);
+			addExtensionToLoadResult(result, extension);
 		}
 	}
 
-	return {
-		extensions,
-		errors,
-		runtime,
-	};
+	return result;
 }
 
 interface PiManifest {

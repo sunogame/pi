@@ -1750,7 +1750,11 @@ export interface Extension {
 
 /** Result of loading extensions. */
 export interface LoadExtensionsResult {
+	/** Runtime-compatible extensions consumed by the existing ExtensionRunner during 2c migration. */
 	extensions: Extension[];
+	runtimeExtensions?: Extension[];
+	tuiExtensions?: Extension[];
+	legacyExtensions?: Extension[];
 	errors: Array<{ path: string; error: string }>;
 	/** Shared runtime - actions are throwing stubs until runner.initialize() */
 	runtime: ExtensionRuntime;

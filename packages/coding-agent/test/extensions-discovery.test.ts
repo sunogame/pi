@@ -485,4 +485,53 @@ describe("extensions discovery", () => {
 		expect(result.errors).toHaveLength(0);
 		expect(result.extensions).toHaveLength(0);
 	});
+
+	it("classifies runtime, tui, both, and legacy extension placements", async () => {
+		const runtimePath = path.join(tempDir, "runtime.ts");
+		const tuiPath = path.join(tempDir, "tui.ts");
+		const bothPath = path.join(tempDir, "both.ts");
+		const legacyPath = path.join(tempDir, "legacy.ts");
+		fs.writeFileSync(
+			runtimePath,
+			`
+				export const placement = "runtime";
+				export default function(pi) {
+					pi.registerCommand("runtime-command", { handler: async () => {} });
+				}
+			`,
+		);
+		fs.writeFileSync(
+			tuiPath,
+			`
+				export const placement = "tui";
+				export function tui(pi) {
+					pi.registerCommand("tui-command", { handler: async () => {} });
+				}
+			`,
+		);
+		fs.writeFileSync(
+			bothPath,
+			`
+				export const placement = "both";
+				export function runtime(pi) {
+					pi.registerCommand("both-runtime-command", { handler: async () => {} });
+				}
+				export function tui(pi) {
+					pi.registerCommand("both-tui-command", { handler: async () => {} });
+				}
+			`,
+		);
+		fs.writeFileSync(legacyPath, extensionCode);
+
+		const { loadExtensions } = await import("../src/core/extensions/loader.ts");
+		const result = await loadExtensions([runtimePath, tuiPath, bothPath, legacyPath], tempDir);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extensions.map((extension) => extension.placement).sort()).toEqual(["both", "legacy", "runtime"]);
+		expect(result.runtimeExtensions?.map((extension) => extension.placement).sort()).toEqual(["both", "runtime"]);
+		expect(result.tuiExtensions?.map((extension) => extension.placement).sort()).toEqual(["both", "tui"]);
+		expect(result.legacyExtensions?.map((extension) => extension.placement)).toEqual(["legacy"]);
+		expect(result.tuiExtensions?.find((extension) => extension.placement === "tui")?.commands.size).toBe(0);
+		expect(result.extensions.some((extension) => extension.placement === "tui")).toBe(false);
+	});
 });
