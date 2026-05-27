@@ -78,6 +78,7 @@ export interface ToolExecutionSnapshot {
 export interface RunSnapshot {
 	runId?: string;
 	isStreaming: boolean;
+	isBashRunning: boolean;
 	streamingMessage?: AgentMessage;
 	retryAttempt: number;
 	lastError?: string;
@@ -387,6 +388,7 @@ export class AgentRuntimeSnapshotProjector {
 			},
 			run: {
 				isStreaming: session.isStreaming,
+				isBashRunning: session.isBashRunning,
 				streamingMessage: this.streamingMessage,
 				retryAttempt: session.retryAttempt,
 				lastError: this.lastError,

@@ -295,8 +295,7 @@ export class InProcessRuntimeClient implements RuntimeClient {
 	}
 
 	async setTransport(transport: Transport): Promise<void> {
-		this.runtime.session.settingsManager.setTransport(transport);
-		this.runtime.session.agent.transport = transport;
+		this.runtime.session.setTransport(transport);
 		this.refreshFromRuntime();
 	}
 
@@ -394,8 +393,10 @@ export class InProcessRuntimeClient implements RuntimeClient {
 		onChunk?: (chunk: string) => void,
 		options?: RuntimeBashOptions,
 	): Promise<RuntimeBashResult> {
+		const bashResult = this.runtime.session.executeBash(command, onChunk, options);
+		this.refreshFromRuntime();
 		try {
-			return await this.runtime.session.executeBash(command, onChunk, options);
+			return await bashResult;
 		} finally {
 			this.refreshFromRuntime();
 		}
@@ -406,6 +407,7 @@ export class InProcessRuntimeClient implements RuntimeClient {
 		result: RuntimeBashResult,
 		options?: { excludeFromContext?: boolean },
 	): Promise<void> {
+		// TODO(runtime-ipc): fold this into executeBash before crossing a process boundary.
 		this.runtime.session.recordBashResult(command, result, options);
 		this.refreshFromRuntime();
 	}
@@ -452,6 +454,7 @@ function applyRuntimeEvent(snapshot: AgentRuntimeSnapshot, event: AgentRuntimeEv
 				run: {
 					...next.run,
 					isStreaming: event.status === "idle" ? false : next.run.isStreaming,
+					isBashRunning: next.run.isBashRunning,
 					streamingMessage: event.status === "idle" ? undefined : next.run.streamingMessage,
 				},
 			};

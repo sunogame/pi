@@ -362,6 +362,10 @@ export class InteractiveMode {
 	private get isRuntimeCompacting(): boolean {
 		return this.runtimeSnapshot.agent.status === "compacting";
 	}
+
+	private get isRuntimeBashRunning(): boolean {
+		return this.runtimeSnapshot.run.isBashRunning;
+	}
 	private getRuntimeCwd(): string {
 		return this.runtimeSnapshot.agent.cwd;
 	}
@@ -2422,7 +2426,7 @@ export class InteractiveMode {
 		this.defaultEditor.onEscape = () => {
 			if (this.isRuntimeStreaming) {
 				void this.restoreQueuedMessagesToEditor({ abort: true });
-			} else if (this.session.isBashRunning) {
+			} else if (this.isRuntimeBashRunning) {
 				void this.runtimeClient.abortBash();
 			} else if (this.isBashMode) {
 				this.editor.setText("");
@@ -2642,7 +2646,7 @@ export class InteractiveMode {
 				const isExcluded = text.startsWith("!!");
 				const command = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (command) {
-					if (this.session.isBashRunning) {
+					if (this.isRuntimeBashRunning) {
 						this.showWarning("A bash command is already running. Press Esc to cancel it first.");
 						this.editor.setText(text);
 						return;

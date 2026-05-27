@@ -23,7 +23,7 @@ import type {
 	AgentTool,
 	ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent, Message, Model, TextContent, Transport } from "@earendil-works/pi-ai";
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
@@ -1604,6 +1604,15 @@ export class AgentSession {
 	setFollowUpMode(mode: "all" | "one-at-a-time"): void {
 		this.agent.followUpMode = mode;
 		this.settingsManager.setFollowUpMode(mode);
+	}
+
+	/**
+	 * Set transport for provider requests.
+	 * Saves the setting and updates the live agent transport together.
+	 */
+	setTransport(transport: Transport): void {
+		this.settingsManager.setTransport(transport);
+		this.agent.transport = transport;
 	}
 
 	// =========================================================================

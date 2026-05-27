@@ -99,6 +99,7 @@ describe("Agent runtime snapshot", () => {
 		expect(snapshot.session.sessionDir).toBe(runtimeHost.session.sessionManager.getSessionDir());
 		expect(snapshot.transcript.entries.every((entry) => entry.type !== "message")).toBe(true);
 		expect(snapshot.run.isStreaming).toBe(false);
+		expect(snapshot.run.isBashRunning).toBe(false);
 		expect(snapshot.run.streamingMessage).toBeUndefined();
 		expect(snapshot.run.pendingApprovals).toEqual([]);
 		expect(snapshot.run.pendingUserMessages).toEqual([]);

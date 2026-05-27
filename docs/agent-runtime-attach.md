@@ -121,6 +121,7 @@ interface AgentRuntimeSnapshot {
   run: {
     runId?: string;
     isStreaming: boolean;
+    isBashRunning: boolean;
     streamingMessage?: AgentMessage;
     retryAttempt: number;
     lastError?: string;
