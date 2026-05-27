@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import {
 	CombinedAutocompleteProvider,
 	Container,
+	Loader,
 	ProcessTerminal,
 	type SlashCommand,
 	setKeybindings,
@@ -14,6 +15,7 @@ import { FooterDataProvider } from "../core/footer-data-provider.ts";
 import { createIpcRuntimeClient, type IpcRuntimeClient } from "../core/ipc-runtime-client.ts";
 import { KeybindingsManager } from "../core/keybindings.ts";
 import { createStreamRuntimeTransport } from "../core/runtime-transport.ts";
+import { CountdownTimer } from "./interactive/components/countdown-timer.ts";
 import { CustomEditor } from "./interactive/components/custom-editor.ts";
 import { RuntimeFooterComponent } from "./interactive/components/footer.ts";
 import { RuntimeTranscriptView } from "./interactive/runtime-transcript-view.ts";
@@ -62,7 +64,7 @@ class RuntimeAttachView {
 	private readonly client: IpcRuntimeClient;
 	private readonly child: ChildProcessWithoutNullStreams;
 	private readonly root = new Container();
-	private readonly status = new Text("", 1, 0);
+	private readonly statusContainer = new Container();
 	private readonly transcript: RuntimeTranscriptView;
 	private readonly help = new Text("", 1, 0);
 	private readonly editor: CustomEditor;
@@ -72,6 +74,9 @@ class RuntimeAttachView {
 	private stopped = false;
 	private lastError: string | undefined;
 	private childStderr = "";
+	private statusLoader: Loader | undefined;
+	private retryCountdown: CountdownTimer | undefined;
+	private statusKind: string | undefined;
 	private unsubscribeStore?: () => void;
 	private finish?: () => void;
 
@@ -105,7 +110,7 @@ class RuntimeAttachView {
 			this.editor.setText("");
 		});
 
-		this.root.addChild(this.status);
+		this.root.addChild(this.statusContainer);
 		this.root.addChild(this.transcript);
 		this.root.addChild(this.help);
 		this.root.addChild(this.editor);
@@ -122,6 +127,7 @@ class RuntimeAttachView {
 				}
 				this.stopped = true;
 				this.unsubscribeStore?.();
+				this.stopStatusLoader();
 				this.footerDataProvider.dispose();
 				this.client.close();
 				if (!this.child.killed) {
@@ -212,8 +218,7 @@ class RuntimeAttachView {
 		try {
 			const handled = await this.client.executeCommand(command.name, command.args);
 			if (!handled) {
-				this.status.setText(theme.fg("warning", `Unsupported command in attach mode: /${command.name}`));
-				this.tui.requestRender();
+				this.showStatusMessage(theme.fg("warning", `Unsupported command in attach mode: /${command.name}`));
 			}
 		} catch (error: unknown) {
 			this.setError(error);
@@ -243,9 +248,80 @@ class RuntimeAttachView {
 		} else if (this.childStderr) {
 			statusParts.push(chalk.yellow(this.childStderr));
 		}
-		this.status.setText(statusParts.join("  "));
+		this.renderRuntimeStatus(snapshot, statusParts.join("  "));
 		this.help.setText(chalk.dim("Enter sends prompt. Esc aborts. /abort aborts. /exit quits."));
 		this.tui.requestRender();
+	}
+
+	private renderRuntimeStatus(snapshot: AgentRuntimeSnapshot, fallbackText: string): void {
+		if (this.lastError || this.childStderr) {
+			this.showStatusMessage(fallbackText);
+			return;
+		}
+
+		switch (snapshot.agent.status) {
+			case "running":
+				this.showLoader("running", "Working...");
+				break;
+			case "compacting":
+				this.showLoader("compacting", "Compacting context...");
+				break;
+			case "retrying":
+				if (this.statusKind !== "retrying") {
+					this.showLoader("retrying", "Retrying...");
+				}
+				break;
+			case "waiting_input":
+				this.showStatusMessage(fallbackText);
+				break;
+			case "error":
+				this.showStatusMessage(theme.fg("error", fallbackText));
+				break;
+			case "idle":
+				this.clearStatus();
+				break;
+		}
+	}
+
+	private showLoader(kind: string, message: string): void {
+		if (this.statusKind === kind && this.statusLoader) {
+			this.statusLoader.setMessage(message);
+			return;
+		}
+		this.stopStatusLoader();
+		this.statusKind = kind;
+		this.statusContainer.clear();
+		this.statusLoader = new Loader(
+			this.tui,
+			(spinner) => theme.fg(kind === "retrying" ? "warning" : "accent", spinner),
+			(text) => theme.fg("muted", text),
+			message,
+		);
+		this.statusContainer.addChild(this.statusLoader);
+	}
+
+	private showStatusMessage(message: string): void {
+		this.stopStatusLoader();
+		this.statusKind = "message";
+		this.statusContainer.clear();
+		this.statusContainer.addChild(new Text(message, 1, 0));
+		this.tui.requestRender();
+	}
+
+	private clearStatus(): void {
+		if (!this.statusKind && this.statusContainer.children.length === 0) {
+			return;
+		}
+		this.stopStatusLoader();
+		this.statusKind = undefined;
+		this.statusContainer.clear();
+	}
+
+	private stopStatusLoader(): void {
+		this.statusLoader?.stop();
+		this.statusLoader = undefined;
+		this.retryCountdown?.dispose();
+		this.retryCountdown = undefined;
 	}
 
 	private setupAutocompleteProvider(snapshot: AgentRuntimeSnapshot): void {
@@ -262,6 +338,25 @@ class RuntimeAttachView {
 		switch (event.type) {
 			case "commands_changed":
 				this.setupAutocompleteProvider(snapshot);
+				break;
+			case "auto_retry_start":
+				this.showLoader("retrying", `Retrying (${event.attempt}/${event.maxAttempts})...`);
+				this.retryCountdown?.dispose();
+				this.retryCountdown = new CountdownTimer(
+					event.delayMs,
+					this.tui,
+					(seconds) =>
+						this.statusLoader?.setMessage(`Retrying (${event.attempt}/${event.maxAttempts}) in ${seconds}s...`),
+					() => {
+						this.retryCountdown = undefined;
+					},
+				);
+				break;
+			case "auto_retry_end":
+				this.clearStatus();
+				if (!event.success) {
+					this.showStatusMessage(theme.fg("error", event.finalError ?? "Retry failed"));
+				}
 				break;
 			case "message_start":
 				this.transcript.handleMessageStart(event.message);
