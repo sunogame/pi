@@ -6,6 +6,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
+import type { AgentRuntimeEvent } from "../agent-runtime-snapshot.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
 import type { ModelRegistry } from "../model-registry.ts";
@@ -226,11 +227,54 @@ const noOpUIContext: ExtensionUIContext = {
 
 export class TuiExtensionRunner {
 	private readonly extensions: Extension[];
+	private readonly errorListeners: Set<ExtensionErrorListener> = new Set();
 	private shortcutDiagnostics: ResourceDiagnostic[] = [];
 	private commandDiagnostics: ResourceDiagnostic[] = [];
 
 	constructor(extensions: Extension[]) {
 		this.extensions = extensions;
+	}
+
+	onError(listener: ExtensionErrorListener): () => void {
+		this.errorListeners.add(listener);
+		return () => this.errorListeners.delete(listener);
+	}
+
+	emitError(error: ExtensionError): void {
+		for (const listener of this.errorListeners) {
+			listener(error);
+		}
+	}
+
+	async emitRuntimeEvent(event: AgentRuntimeEvent, ctx: TuiExtensionContext): Promise<void> {
+		await this.emitTuiEvent("runtime_event", event, ctx);
+		if (event.type === "extension_event") {
+			await this.emitTuiEvent("extension_event", event, ctx);
+		}
+	}
+
+	private async emitTuiEvent(
+		eventName: "runtime_event" | "extension_event" | "input",
+		event: unknown,
+		ctx: TuiExtensionContext,
+	): Promise<void> {
+		for (const ext of this.extensions) {
+			const handlers = ext.tuiHandlers?.get(eventName);
+			if (!handlers || handlers.length === 0) continue;
+
+			for (const handler of handlers) {
+				try {
+					await handler(event, ctx);
+				} catch (error) {
+					this.emitError({
+						extensionPath: ext.path,
+						event: eventName,
+						error: error instanceof Error ? error.message : String(error),
+						stack: error instanceof Error ? error.stack : undefined,
+					});
+				}
+			}
+		}
 	}
 
 	getShortcuts(resolvedKeybindings: KeybindingsConfig): Map<KeyId, TuiExtensionShortcut> {

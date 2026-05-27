@@ -1599,6 +1599,9 @@ export class InteractiveMode {
 
 	private refreshTuiExtensionRunner(): void {
 		this.tuiExtensionRunner = new TuiExtensionRunner(this.session.resourceLoader.getExtensions().tuiExtensions ?? []);
+		this.tuiExtensionRunner.onError((error) => {
+			this.showExtensionError(error.extensionPath, error.error, error.stack);
+		});
 	}
 
 	private createTuiExtensionContext(): TuiExtensionContext {
@@ -2740,6 +2743,7 @@ export class InteractiveMode {
 		}
 
 		this.footer.invalidate();
+		await this.tuiExtensionRunner.emitRuntimeEvent(event, this.createTuiExtensionContext());
 
 		switch (event.type) {
 			case "status_changed":

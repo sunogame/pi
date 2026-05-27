@@ -524,6 +524,14 @@ describe("extensions discovery", () => {
 				export function tui(pi) {
 					pi.registerCommand("both-tui-command", { handler: async () => {} });
 					pi.registerMessageRenderer("both-tui-message", () => undefined);
+					pi.tui.on("extension_event", (event) => {
+						globalThis.__piExtensionEventPayloads ??= [];
+						globalThis.__piExtensionEventPayloads.push(event.payload);
+					});
+					pi.tui.on("runtime_event", (event) => {
+						globalThis.__piRuntimeEventTypes ??= [];
+						globalThis.__piRuntimeEventTypes.push(event.type);
+					});
 				}
 			`,
 		);
@@ -557,6 +565,18 @@ describe("extensions discovery", () => {
 		).toEqual(["both-tui-command", "tui-command"]);
 		expect(tuiRunner.getShortcuts(new KeybindingsManager().getEffectiveConfig()).has("ctrl+u")).toBe(true);
 		expect(tuiRunner.getMessageRenderer("tui-message")).toBeDefined();
+		const globals = globalThis as typeof globalThis & {
+			__piExtensionEventPayloads?: unknown[];
+			__piRuntimeEventTypes?: string[];
+		};
+		globals.__piExtensionEventPayloads = [];
+		globals.__piRuntimeEventTypes = [];
+		await tuiRunner.emitRuntimeEvent(
+			{ id: 1, type: "extension_event", namespace: "test.both", payload: { ok: true } },
+			{} as never,
+		);
+		expect(globals.__piExtensionEventPayloads).toEqual([{ ok: true }]);
+		expect(globals.__piRuntimeEventTypes).toEqual(["extension_event"]);
 		expect(result.extensions.some((extension) => extension.placement === "tui")).toBe(false);
 	});
 });
