@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 
-export type Mode = "text" | "json" | "rpc" | "runtime-ipc";
+export type Mode = "text" | "json" | "rpc" | "runtime-ipc" | "attach-ipc";
 
 export interface Args {
 	provider?: string;
@@ -73,7 +73,7 @@ export function parseArgs(args: string[]): Args {
 			result.version = true;
 		} else if (arg === "--mode" && i + 1 < args.length) {
 			const mode = args[++i];
-			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "runtime-ipc") {
+			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "runtime-ipc" || mode === "attach-ipc") {
 				result.mode = mode;
 			}
 		} else if (arg === "--continue" || arg === "-c") {
@@ -219,7 +219,7 @@ ${chalk.bold("Options:")}
   --api-key <key>                API key (defaults to env vars)
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
-  --mode <mode>                  Output mode: text (default), json, rpc, or runtime-ipc
+  --mode <mode>                  Output mode: text (default), json, rpc, runtime-ipc, or attach-ipc
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume

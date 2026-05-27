@@ -7,4 +7,5 @@ export { type PrintModeOptions, runPrintMode } from "./print-mode.ts";
 export { type ModelInfo, RpcClient, type RpcClientOptions, type RpcEventListener } from "./rpc/rpc-client.ts";
 export { runRpcMode } from "./rpc/rpc-mode.ts";
 export type { RpcCommand, RpcResponse, RpcSessionState } from "./rpc/rpc-types.ts";
+export { runRuntimeAttachMode, toRuntimeIpcArgs } from "./runtime-attach-mode.ts";
 export { runRuntimeIpcMode } from "./runtime-ipc-mode.ts";

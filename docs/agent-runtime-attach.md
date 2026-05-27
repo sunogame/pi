@@ -27,9 +27,11 @@ The target model is closer to `tmux`:
   `runtime`, `tui`, `both`, and `legacy` placement so TUI component factories
   and runtime internals do not cross the future IPC boundary. See
   [Phase 2 Extension Boundary](./phase-2-extension-boundary.md).
-- **Phase 3 - Single Runtime IPC:** in progress. Runs one agent runtime outside
-  the TUI process and attaches a TUI client to it. The protocol baseline is
-  defined in [Runtime IPC Protocol](./runtime-ipc-protocol.md).
+- **Phase 3 - Single Runtime IPC:** complete for the baseline. Runs one agent
+  runtime outside the TUI process, attaches a minimal TUI client to it with
+  `--mode attach-ipc`, and validates reconnect/buffer-overflow replay behavior.
+  The protocol baseline is defined in
+  [Runtime IPC Protocol](./runtime-ipc-protocol.md).
 - **Phase 4 - Supervisor / Multi Runtime:** planned. Adds a supervisor, runtime
   discovery, multi-agent attach switching, and service discovery.
 

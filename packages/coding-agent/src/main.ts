@@ -41,7 +41,7 @@ import { SessionManager } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { InteractiveMode, runPrintMode, runRpcMode, runRuntimeIpcMode } from "./modes/index.ts";
+import { InteractiveMode, runPrintMode, runRpcMode, runRuntimeAttachMode, runRuntimeIpcMode } from "./modes/index.ts";
 import { ExtensionSelectorComponent } from "./modes/interactive/components/extension-selector.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
@@ -94,7 +94,7 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
-type AppMode = "interactive" | "print" | "json" | "rpc" | "runtime-ipc";
+type AppMode = "interactive" | "print" | "json" | "rpc" | "runtime-ipc" | "attach-ipc";
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
 	if (parsed.mode === "rpc") {
@@ -102,6 +102,9 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
 	}
 	if (parsed.mode === "runtime-ipc") {
 		return "runtime-ipc";
+	}
+	if (parsed.mode === "attach-ipc") {
+		return "attach-ipc";
 	}
 	if (parsed.mode === "json") {
 		return "json";
@@ -112,7 +115,7 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
 	return "interactive";
 }
 
-function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc" | "runtime-ipc"> {
+function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc" | "runtime-ipc" | "attach-ipc"> {
 	return appMode === "json" ? "json" : "text";
 }
 
@@ -456,7 +459,7 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("parseArgs");
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY);
-	const shouldTakeOverStdout = appMode !== "interactive";
+	const shouldTakeOverStdout = appMode !== "interactive" && appMode !== "attach-ipc";
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
 	}
@@ -480,12 +483,24 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
-	if ((parsed.mode === "rpc" || parsed.mode === "runtime-ipc") && parsed.fileArgs.length > 0) {
+	if (
+		(parsed.mode === "rpc" || parsed.mode === "runtime-ipc" || parsed.mode === "attach-ipc") &&
+		parsed.fileArgs.length > 0
+	) {
 		console.error(chalk.red("Error: @file arguments are not supported in RPC/runtime IPC modes"));
 		process.exit(1);
 	}
 
 	validateForkFlags(parsed);
+
+	if (appMode === "attach-ipc") {
+		if (parsed.help) {
+			printHelp();
+			process.exit(0);
+		}
+		await runRuntimeAttachMode(args);
+		return;
+	}
 
 	// Run migrations (pass cwd for project-local migrations)
 	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = runMigrations(process.cwd());

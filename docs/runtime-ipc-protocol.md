@@ -6,6 +6,20 @@ to one runtime, render its state, send prompts, abort runs, and execute runtime
 commands. Model/auth management and legacy extension surfaces remain local
 until they get explicit serializable APIs.
 
+The baseline CLI implementation has two process roles:
+
+- `--mode runtime-ipc` starts a runtime process that speaks this JSONL
+  protocol on stdio.
+- `--mode attach-ipc` starts a minimal TUI client process, spawns a child
+  `--mode runtime-ipc` process with the same runtime flags, attaches through an
+  `IpcRuntimeClient`, and renders transcript/status while sending prompts and
+  aborts over IPC.
+
+`--mode attach-ipc` is intentionally smaller than the historical in-process
+`InteractiveMode`: model/auth pickers, legacy extension UI, and local-only
+callbacks stay out of the Phase 3 baseline until they have explicit
+serializable APIs.
+
 ## Transport
 
 Phase 3 uses a line-oriented JSON transport. Stdio and Unix sockets should both
