@@ -33,6 +33,7 @@ export {
 	type AgentSessionConfig,
 	type AgentSessionEvent,
 	type AgentSessionEventListener,
+	type ExtensionBindings,
 	type ModelCycleResult,
 	type ParsedSkillBlock,
 	type PromptOptions,
@@ -186,6 +187,18 @@ export type {
 export { DefaultPackageManager } from "./core/package-manager.ts";
 export type { ResourceCollision, ResourceDiagnostic, ResourceLoader } from "./core/resource-loader.ts";
 export { DefaultResourceLoader, loadProjectContextFiles } from "./core/resource-loader.ts";
+export {
+	AgentRuntimeStore,
+	type AgentRuntimeStoreListener,
+	createInProcessRuntimeClient,
+	InProcessRuntimeClient,
+	type RuntimeClient,
+	type RuntimeClientAttachOptions,
+	type RuntimeForkOptions,
+	type RuntimeNewSessionOptions,
+	type RuntimeQueueMode,
+	type RuntimeSwitchSessionOptions,
+} from "./core/runtime-client.ts";
 // SDK for programmatic usage
 export {
 	AgentSessionRuntime,

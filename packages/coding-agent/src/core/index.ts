@@ -7,6 +7,7 @@ export {
 	type AgentSessionConfig,
 	type AgentSessionEvent,
 	type AgentSessionEventListener,
+	type ExtensionBindings,
 	type ModelCycleResult,
 	type PromptOptions,
 	type SessionStats,
@@ -74,4 +75,16 @@ export {
 	type TurnStartEvent,
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
+export {
+	AgentRuntimeStore,
+	type AgentRuntimeStoreListener,
+	createInProcessRuntimeClient,
+	InProcessRuntimeClient,
+	type RuntimeClient,
+	type RuntimeClientAttachOptions,
+	type RuntimeForkOptions,
+	type RuntimeNewSessionOptions,
+	type RuntimeQueueMode,
+	type RuntimeSwitchSessionOptions,
+} from "./runtime-client.ts";
 export { createSyntheticSourceInfo } from "./source-info.ts";

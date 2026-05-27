@@ -149,7 +149,7 @@ export type AgentRuntimeEvent =
 	| { id: number; type: "extension_event"; namespace: string; payload: unknown }
 	| { id: number; type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
 	| { id: number; type: "compaction_end"; reason: "manual" | "threshold" | "overflow"; aborted: boolean }
-	| { id: number; type: "transcript_changed"; reason: "compaction" | "fork" | "import" }
+	| { id: number; type: "transcript_changed"; reason: "append" | "compaction" | "fork" | "import" }
 	| { id: number; type: "error"; message: string };
 
 export type AgentRuntimeEventListener = (event: AgentRuntimeEvent) => void;
@@ -483,6 +483,9 @@ export class AgentRuntimeSnapshotProjector {
 			}
 			case "queue_update":
 				this.emit({ type: "queue_changed", pendingUserMessages: pendingUserMessages(this.session) });
+				break;
+			case "transcript_changed":
+				this.emit({ type: "transcript_changed", reason: event.reason });
 				break;
 			case "compaction_start":
 				this.emitStatusIfChanged("compacting");

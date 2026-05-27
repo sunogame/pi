@@ -206,7 +206,7 @@ type AgentRuntimeEvent =
   | { id: number; type: "extension_event"; namespace: string; payload: unknown }
   | { id: number; type: "compaction_start"; reason: string }
   | { id: number; type: "compaction_end"; reason: string; aborted: boolean }
-  | { id: number; type: "transcript_changed"; reason: "compaction" | "fork" | "import" }
+  | { id: number; type: "transcript_changed"; reason: "append" | "compaction" | "fork" | "import" }
   | { id: number; type: "error"; message: string };
 ```
 
@@ -220,8 +220,8 @@ their own sockets or FIFOs.
 
 `session_changed` means the attached session changed, such as `/new`, `/fork`,
 or importing a different transcript. `transcript_changed` means the same
-session remains attached but the transcript entry sequence changed. The first
-v1 producer is successful compaction.
+session remains attached but the transcript entry sequence changed. v1
+producers include appended transcript entries and successful compaction.
 
 ## Extension Placement
 

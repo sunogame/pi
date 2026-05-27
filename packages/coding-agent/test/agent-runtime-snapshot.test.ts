@@ -11,6 +11,8 @@ import {
 	createAgentSessionServices,
 } from "../src/core/agent-session-runtime.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import type { ExtensionUIContext } from "../src/core/extensions/index.ts";
+import { createInProcessRuntimeClient } from "../src/core/runtime-client.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 
 describe("Agent runtime snapshot", () => {
@@ -120,6 +122,7 @@ describe("Agent runtime snapshot", () => {
 		expect(events.map((event) => event.type)).toContain("status_changed");
 		expect(events.map((event) => event.type)).toContain("message_start");
 		expect(events.map((event) => event.type)).toContain("message_end");
+		expect(events.map((event) => event.type)).toContain("transcript_changed");
 		expect(events.at(-1)?.id).toBe(events.length);
 		expect(runtimeHost.getSnapshot().eventCursor).toBe(events.at(-1)?.id);
 		expect(runtimeHost.getRuntimeEventsAfter(0).map((event) => event.id)).toEqual(events.map((event) => event.id));
@@ -151,5 +154,61 @@ describe("Agent runtime snapshot", () => {
 				payload: { count: 1 },
 			},
 		]);
+	});
+
+	it("dedupes attach events in the in-process runtime client", async () => {
+		const { runtimeHost } = await createRuntimeHost();
+		const client = createInProcessRuntimeClient(runtimeHost);
+		const liveEvents: AgentRuntimeEvent[] = [];
+
+		const attachResult = await client.attach({
+			listener: (event) => liveEvents.push(event),
+		});
+		runtimeHost.emitExtensionRuntimeEvent("example.widget", { count: 1 });
+
+		expect(client.store.snapshot.eventCursor).toBe(1);
+		expect(client.store.lastAppliedEventId).toBe(1);
+		expect(liveEvents).toHaveLength(1);
+		expect(client.store.apply(liveEvents[0])).toBe(false);
+		expect(client.store.lastAppliedEventId).toBe(1);
+
+		attachResult.unsubscribe();
+	});
+
+	it("refreshes the in-process client store after commands", async () => {
+		const { runtimeHost } = await createRuntimeHost();
+		const client = createInProcessRuntimeClient(runtimeHost);
+		await client.attach();
+
+		await client.prompt("hello");
+
+		expect(client.store.snapshot.agent.status).toBe("idle");
+		expect(client.store.snapshot.run.isStreaming).toBe(false);
+		expect(client.store.snapshot.transcript.entries.filter((entry) => entry.type === "message")).toHaveLength(2);
+		expect(client.store.snapshot.transcript.entries.at(-1)?.type).toBe("message");
+	});
+
+	it("refreshes the in-process client store after live transcript changes", async () => {
+		const { runtimeHost } = await createRuntimeHost();
+		const client = createInProcessRuntimeClient(runtimeHost);
+		await client.attach();
+
+		await runtimeHost.session.prompt("hello");
+
+		expect(client.store.snapshot.transcript.entries.filter((entry) => entry.type === "message")).toHaveLength(2);
+	});
+
+	it("binds and unbinds extension UI through the in-process runtime client", async () => {
+		const { runtimeHost } = await createRuntimeHost();
+		const client = createInProcessRuntimeClient(runtimeHost);
+		const uiContext = {
+			confirm: async () => true,
+		} as unknown as ExtensionUIContext;
+
+		await client.bindUI({ uiContext });
+		expect(runtimeHost.session.extensionRunner.hasUI()).toBe(true);
+
+		await client.unbindUI();
+		expect(runtimeHost.session.extensionRunner.hasUI()).toBe(false);
 	});
 });

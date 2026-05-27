@@ -135,6 +135,7 @@ export type AgentSessionEvent =
 	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
+	| { type: "transcript_changed"; reason: "append" }
 	| {
 			type: "compaction_end";
 			reason: "manual" | "threshold" | "overflow";
@@ -497,6 +498,7 @@ export class AgentSession {
 
 		// Handle session persistence
 		if (event.type === "message_end") {
+			let transcriptChanged = false;
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
 				// Persist as CustomMessageEntry
@@ -506,6 +508,7 @@ export class AgentSession {
 					event.message.display,
 					event.message.details,
 				);
+				transcriptChanged = true;
 			} else if (
 				event.message.role === "user" ||
 				event.message.role === "assistant" ||
@@ -513,8 +516,12 @@ export class AgentSession {
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
 				this.sessionManager.appendMessage(event.message);
+				transcriptChanged = true;
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
+			if (transcriptChanged) {
+				this._emit({ type: "transcript_changed", reason: "append" });
+			}
 
 			// Track assistant message for auto-compaction (checked on agent_end)
 			if (event.message.role === "assistant") {
@@ -2058,6 +2065,15 @@ export class AgentSession {
 		this._applyExtensionBindings(this._extensionRunner);
 		await this._extensionRunner.emit(this._sessionStartEvent);
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+	}
+
+	unbindExtensions(): void {
+		this._extensionUIContext = undefined;
+		this._extensionCommandContextActions = undefined;
+		this._extensionAbortHandler = undefined;
+		this._extensionShutdownHandler = undefined;
+		this._extensionErrorListener = undefined;
+		this._applyExtensionBindings(this._extensionRunner);
 	}
 
 	private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {
