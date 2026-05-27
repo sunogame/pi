@@ -58,6 +58,7 @@ import {
 	getShareViewerUrl,
 	VERSION,
 } from "../../config.ts";
+import type { AgentRuntimeSnapshot } from "../../core/agent-runtime-snapshot.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type {
@@ -79,7 +80,7 @@ import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
-import { type SessionContext, SessionManager } from "../../core/session-manager.ts";
+import { buildSessionContext, type SessionContext, SessionManager } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
@@ -1610,7 +1611,10 @@ export class InteractiveMode {
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.pendingTools.clear();
-		this.renderInitialMessages();
+		this.renderRuntimeSnapshot(this.runtimeHost.getSnapshot(), {
+			updateFooter: true,
+			populateHistory: true,
+		});
 	}
 
 	/**
@@ -1718,6 +1722,22 @@ export class InteractiveMode {
 			this.statusContainer.addChild(this.loadingAnimation);
 		}
 		this.ui.requestRender();
+	}
+
+	private renderRuntimeWorkingState(snapshot: AgentRuntimeSnapshot): void {
+		const shouldShowLoader = this.workingVisible && (snapshot.run.isStreaming || snapshot.agent.status === "running");
+		if (shouldShowLoader) {
+			if (!this.loadingAnimation) {
+				this.statusContainer.clear();
+				this.loadingAnimation = this.createWorkingLoader();
+				this.statusContainer.addChild(this.loadingAnimation);
+			}
+			return;
+		}
+
+		if (snapshot.agent.status !== "compacting") {
+			this.stopWorkingLoader();
+		}
 	}
 
 	private setWorkingIndicator(options?: LoaderIndicatorOptions): void {
@@ -3190,21 +3210,82 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	renderInitialMessages(): void {
-		// Get aligned messages and entries from session context
-		const context = this.sessionManager.buildSessionContext();
+	private renderRuntimeSnapshot(
+		snapshot: AgentRuntimeSnapshot,
+		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
+	): void {
+		const context = buildSessionContext(snapshot.transcript.entries, snapshot.transcript.currentLeafId);
 		this.renderSessionContext(context, {
-			updateFooter: true,
-			populateHistory: true,
+			updateFooter: options.updateFooter,
+			populateHistory: options.populateHistory,
 		});
+		this.renderStreamingMessage(snapshot);
+		this.renderPendingMessagesDisplay(snapshot.run.pendingUserMessages);
+		this.renderActiveToolExecutions(snapshot);
+		this.renderRuntimeWorkingState(snapshot);
 
 		// Show compaction info if session was compacted
-		const allEntries = this.sessionManager.getEntries();
-		const compactionCount = allEntries.filter((e) => e.type === "compaction").length;
+		const compactionCount = snapshot.transcript.entries.filter((e) => e.type === "compaction").length;
 		if (compactionCount > 0) {
 			const times = compactionCount === 1 ? "1 time" : `${compactionCount} times`;
 			this.showStatus(`Session compacted ${times}`);
 		}
+	}
+
+	private renderStreamingMessage(snapshot: AgentRuntimeSnapshot): void {
+		const message = snapshot.run.streamingMessage;
+		if (!message || message.role !== "assistant") {
+			return;
+		}
+		this.streamingComponent = new AssistantMessageComponent(
+			undefined,
+			this.hideThinkingBlock,
+			this.getMarkdownThemeWithSettings(),
+			this.hiddenThinkingLabel,
+		);
+		this.streamingMessage = message;
+		this.chatContainer.addChild(this.streamingComponent);
+		this.streamingComponent.updateContent(this.streamingMessage);
+	}
+
+	private renderActiveToolExecutions(snapshot: AgentRuntimeSnapshot): void {
+		for (const tool of snapshot.run.activeToolExecutions) {
+			let component = this.pendingTools.get(tool.toolCallId);
+			if (!component) {
+				component = new ToolExecutionComponent(
+					tool.toolName,
+					tool.toolCallId,
+					tool.input,
+					{
+						showImages: this.settingsManager.getShowImages(),
+						imageWidthCells: this.settingsManager.getImageWidthCells(),
+					},
+					this.getRegisteredToolDefinition(tool.toolName),
+					this.ui,
+					snapshot.agent.cwd,
+				);
+				component.setExpanded(this.toolOutputExpanded);
+				this.chatContainer.addChild(component);
+				this.pendingTools.set(tool.toolCallId, component);
+			}
+			component.markExecutionStarted();
+			if (tool.outputPreview) {
+				component.updateResult(
+					{
+						content: [{ type: "text", text: tool.outputPreview }],
+						isError: tool.isError ?? false,
+					},
+					tool.status === "pending" || tool.status === "running",
+				);
+			}
+		}
+	}
+
+	renderInitialMessages(): void {
+		this.renderRuntimeSnapshot(this.runtimeHost.getSnapshot(), {
+			updateFooter: true,
+			populateHistory: true,
+		});
 	}
 
 	async getUserInput(): Promise<string> {
@@ -3218,8 +3299,7 @@ export class InteractiveMode {
 
 	private rebuildChatFromMessages(): void {
 		this.chatContainer.clear();
-		const context = this.sessionManager.buildSessionContext();
-		this.renderSessionContext(context);
+		this.renderRuntimeSnapshot(this.runtimeHost.getSnapshot());
 	}
 
 	// =========================================================================
@@ -3670,9 +3750,12 @@ export class InteractiveMode {
 		};
 	}
 
-	private updatePendingMessagesDisplay(): void {
+	private renderPendingMessagesDisplay(messages: AgentRuntimeSnapshot["run"]["pendingUserMessages"]): void {
 		this.pendingMessagesContainer.clear();
-		const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
+		const steeringMessages = messages.filter((message) => message.kind === "steering").map((message) => message.text);
+		const followUpMessages = messages
+			.filter((message) => message.kind === "follow_up")
+			.map((message) => message.text);
 		if (steeringMessages.length > 0 || followUpMessages.length > 0) {
 			this.pendingMessagesContainer.addChild(new Spacer(1));
 			for (const message of steeringMessages) {
@@ -3687,6 +3770,14 @@ export class InteractiveMode {
 			const hintText = theme.fg("dim", `↳ ${dequeueHint} to edit all queued messages`);
 			this.pendingMessagesContainer.addChild(new TruncatedText(hintText, 1, 0));
 		}
+	}
+
+	private updatePendingMessagesDisplay(): void {
+		const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
+		this.renderPendingMessagesDisplay([
+			...steeringMessages.map((text) => ({ kind: "steering" as const, text })),
+			...followUpMessages.map((text) => ({ kind: "follow_up" as const, text })),
+		]);
 	}
 
 	private restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {

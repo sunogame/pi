@@ -12,9 +12,16 @@ export interface AgentRuntimeModelSnapshot {
 	displayName?: string;
 }
 
+export interface AgentRuntimeIdentity {
+	agentId: string;
+	agentLabel?: string;
+}
+
+export type AgentRuntimeCapability = "event_replay" | "extension_events" | "input_required" | "approval" | string;
+
 export interface AgentIdentitySnapshot {
 	agentId: string;
-	name?: string;
+	agentLabel?: string;
 	cwd: string;
 	model: AgentRuntimeModelSnapshot;
 	thinkingLevel: ThinkingLevel;
@@ -41,6 +48,21 @@ export interface PendingUserMessageSnapshot {
 	text: string;
 }
 
+export interface PendingApprovalSnapshot {
+	approvalId: string;
+	toolCallId?: string;
+	toolName?: string;
+	title?: string;
+	message: string;
+	details?: unknown;
+}
+
+export interface InputRequiredSnapshot {
+	inputId: string;
+	question: string;
+	details?: unknown;
+}
+
 export type ToolExecutionStatus = "pending" | "running" | "completed" | "error" | "aborted";
 
 export interface ToolExecutionSnapshot {
@@ -56,8 +78,12 @@ export interface ToolExecutionSnapshot {
 export interface RunSnapshot {
 	runId?: string;
 	isStreaming: boolean;
+	streamingMessage?: AgentMessage;
 	retryAttempt: number;
+	lastError?: string;
 	pendingUserMessages: PendingUserMessageSnapshot[];
+	pendingApprovals: PendingApprovalSnapshot[];
+	inputRequired?: InputRequiredSnapshot;
 	activeToolExecutions: ToolExecutionSnapshot[];
 }
 
@@ -66,13 +92,44 @@ export interface ToolsSnapshot {
 	available: ToolInfo[];
 }
 
+export interface RuntimeResourceSnapshot {
+	skills: Array<{ name: string; description: string; filePath: string; disableModelInvocation: boolean }>;
+	promptTemplates: Array<{ name: string; description: string; argumentHint?: string; filePath: string }>;
+	themes: Array<{ name?: string; sourcePath?: string }>;
+	extensions: Array<{ path: string; resolvedPath: string }>;
+	agentsFiles: Array<{ path: string }>;
+}
+
+export interface RuntimeModelRegistrySnapshot {
+	available: AgentRuntimeModelSnapshot[];
+	error?: string;
+}
+
+export interface RuntimeDiagnosticSnapshot {
+	resources: Array<{ type: "warning" | "error" | "collision"; message: string; path?: string }>;
+	extensions: Array<{ path: string; error: string }>;
+}
+
+export interface RuntimeConfigSnapshot {
+	autoCompaction: boolean;
+	steeringMode: "all" | "one-at-a-time";
+	followUpMode: "all" | "one-at-a-time";
+	scopedModels: Array<{ model: AgentRuntimeModelSnapshot; thinkingLevel?: ThinkingLevel }>;
+}
+
 export interface AgentRuntimeSnapshot {
 	protocolVersion: 1;
+	capabilities: AgentRuntimeCapability[];
+	eventCursor: number;
 	agent: AgentIdentitySnapshot;
 	session: SessionSnapshot;
 	transcript: TranscriptSnapshot;
 	run: RunSnapshot;
 	tools: ToolsSnapshot;
+	resources: RuntimeResourceSnapshot;
+	modelRegistry: RuntimeModelRegistrySnapshot;
+	diagnostics: RuntimeDiagnosticSnapshot;
+	config: RuntimeConfigSnapshot;
 }
 
 export type AgentRuntimeEvent =
@@ -85,11 +142,34 @@ export type AgentRuntimeEvent =
 	| { id: number; type: "tool_update"; toolCallId: string; patch: Partial<ToolExecutionSnapshot> }
 	| { id: number; type: "tool_end"; tool: ToolExecutionSnapshot }
 	| { id: number; type: "queue_changed"; pendingUserMessages: PendingUserMessageSnapshot[] }
+	| { id: number; type: "approval_requested"; approval: PendingApprovalSnapshot }
+	| { id: number; type: "approval_resolved"; approvalId: string }
+	| { id: number; type: "input_required"; input: InputRequiredSnapshot }
+	| { id: number; type: "input_resolved"; inputId: string }
+	| { id: number; type: "extension_event"; namespace: string; payload: unknown }
 	| { id: number; type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
 	| { id: number; type: "compaction_end"; reason: "manual" | "threshold" | "overflow"; aborted: boolean }
 	| { id: number; type: "error"; message: string };
 
 export type AgentRuntimeEventListener = (event: AgentRuntimeEvent) => void;
+export interface AgentRuntimeAttachOptions {
+	lastSeenEventId?: number;
+	listener?: AgentRuntimeEventListener;
+}
+
+export interface AgentRuntimeAttachResult {
+	snapshot: AgentRuntimeSnapshot;
+	initialEvents: AgentRuntimeEvent[];
+	initialEventsComplete: boolean;
+	unsubscribe: () => void;
+}
+
+export interface AgentRuntimeSnapshotProjectorOptions {
+	identity?: Partial<AgentRuntimeIdentity>;
+	eventLogLimit?: number;
+	capabilities?: AgentRuntimeCapability[];
+}
+
 type AgentRuntimeEventDraft = AgentRuntimeEvent extends infer T
 	? T extends { id: number }
 		? Omit<T, "id">
@@ -141,17 +221,88 @@ function sessionSnapshot(session: AgentSession): SessionSnapshot {
 	};
 }
 
+function resourcesSnapshot(session: AgentSession): RuntimeResourceSnapshot {
+	const skills = session.resourceLoader.getSkills().skills.map((skill) => ({
+		name: skill.name,
+		description: skill.description,
+		filePath: skill.filePath,
+		disableModelInvocation: skill.disableModelInvocation,
+	}));
+	const promptTemplates = session.resourceLoader.getPrompts().prompts.map((prompt) => ({
+		name: prompt.name,
+		description: prompt.description,
+		argumentHint: prompt.argumentHint,
+		filePath: prompt.filePath,
+	}));
+	const themes = session.resourceLoader.getThemes().themes.map((theme) => ({
+		name: theme.name,
+		sourcePath: theme.sourcePath,
+	}));
+	const extensions = session.resourceLoader.getExtensions().extensions.map((extension) => ({
+		path: extension.path,
+		resolvedPath: extension.resolvedPath,
+	}));
+	const agentsFiles = session.resourceLoader.getAgentsFiles().agentsFiles.map((file) => ({ path: file.path }));
+	return { skills, promptTemplates, themes, extensions, agentsFiles };
+}
+
+function diagnosticsSnapshot(session: AgentSession): RuntimeDiagnosticSnapshot {
+	const skills = session.resourceLoader.getSkills().diagnostics;
+	const prompts = session.resourceLoader.getPrompts().diagnostics;
+	const themes = session.resourceLoader.getThemes().diagnostics;
+	const extensions = session.resourceLoader.getExtensions();
+	return {
+		resources: [...skills, ...prompts, ...themes].map((diagnostic) => ({
+			type: diagnostic.type,
+			message: diagnostic.message,
+			path: diagnostic.path,
+		})),
+		extensions: extensions.errors.map((error) => ({ path: error.path, error: error.error })),
+	};
+}
+
+function modelRegistrySnapshot(session: AgentSession): RuntimeModelRegistrySnapshot {
+	return {
+		available: session.modelRegistry.getAvailable().map((model) => modelSnapshot(model)),
+		error: session.modelRegistry.getError(),
+	};
+}
+
+function configSnapshot(session: AgentSession): RuntimeConfigSnapshot {
+	return {
+		autoCompaction: session.autoCompactionEnabled,
+		steeringMode: session.steeringMode,
+		followUpMode: session.followUpMode,
+		scopedModels: session.scopedModels.map((scoped) => ({
+			model: modelSnapshot(scoped.model),
+			thinkingLevel: scoped.thinkingLevel,
+		})),
+	};
+}
+
 export class AgentRuntimeSnapshotProjector {
+	private readonly identity: AgentRuntimeIdentity;
+	private readonly maxEventLogEntries: number;
+	private readonly capabilities: AgentRuntimeCapability[];
 	private readonly listeners = new Set<AgentRuntimeEventListener>();
+	private readonly eventLog: AgentRuntimeEvent[] = [];
 	private readonly activeToolExecutions = new Map<string, ToolExecutionSnapshot>();
 	private status: AgentRuntimeStatus;
+	private streamingMessage?: AgentMessage;
+	private lastError?: string;
 	private nextEventId = 1;
 	private unsubscribe?: () => void;
 
 	private session: AgentSession;
 
-	constructor(session: AgentSession) {
+	constructor(session: AgentSession, options: AgentRuntimeSnapshotProjectorOptions = {}) {
 		this.session = session;
+		this.identity = {
+			agentId: options.identity?.agentId ?? session.sessionId,
+			agentLabel: options.identity?.agentLabel,
+		};
+		this.maxEventLogEntries = options.eventLogLimit ?? 10000;
+		this.capabilities = options.capabilities ?? ["event_replay", "extension_events"];
 		this.status = statusFromSession(session);
 		this.subscribeToSession(session);
 	}
@@ -160,6 +311,7 @@ export class AgentRuntimeSnapshotProjector {
 		const previousStatus = this.status;
 		this.unsubscribe?.();
 		this.activeToolExecutions.clear();
+		this.streamingMessage = undefined;
 		this.session = session;
 		this.status = statusFromSession(session);
 		this.subscribeToSession(session);
@@ -183,13 +335,45 @@ export class AgentRuntimeSnapshotProjector {
 		};
 	}
 
+	attach(options: AgentRuntimeAttachOptions = {}): AgentRuntimeAttachResult {
+		const unsubscribe = options.listener ? this.subscribe(options.listener) : () => {};
+		const snapshot = this.getSnapshot();
+		const initialEvents =
+			options.lastSeenEventId === undefined
+				? []
+				: this.getEventsAfter(options.lastSeenEventId).filter((event) => event.id <= snapshot.eventCursor);
+		return {
+			snapshot,
+			initialEvents,
+			initialEventsComplete: this.hasCompleteEventsAfter(options.lastSeenEventId),
+			unsubscribe,
+		};
+	}
+
+	getEventsAfter(eventId: number): AgentRuntimeEvent[] {
+		return this.eventLog.filter((event) => event.id > eventId);
+	}
+
+	emitExtensionEvent(namespace: string, payload: unknown): void {
+		this.emit({ type: "extension_event", namespace, payload });
+	}
+
+	private hasCompleteEventsAfter(eventId: number | undefined): boolean {
+		if (eventId === undefined || this.eventLog.length === 0) {
+			return true;
+		}
+		return eventId >= this.eventLog[0].id - 1;
+	}
+
 	getSnapshot(): AgentRuntimeSnapshot {
 		const session = this.session;
 		return {
 			protocolVersion: 1,
+			capabilities: this.capabilities,
+			eventCursor: this.nextEventId - 1,
 			agent: {
-				agentId: session.sessionId,
-				name: session.sessionName,
+				agentId: this.identity.agentId,
+				agentLabel: this.identity.agentLabel,
 				cwd: session.sessionManager.getCwd(),
 				model: modelSnapshot(session.model),
 				thinkingLevel: session.thinkingLevel,
@@ -202,8 +386,11 @@ export class AgentRuntimeSnapshotProjector {
 			},
 			run: {
 				isStreaming: session.isStreaming,
+				streamingMessage: this.streamingMessage,
 				retryAttempt: session.retryAttempt,
+				lastError: this.lastError,
 				pendingUserMessages: pendingUserMessages(session),
+				pendingApprovals: [],
 				activeToolExecutions: Array.from(this.activeToolExecutions.values()).filter(
 					(tool) => tool.status === "pending" || tool.status === "running",
 				),
@@ -212,6 +399,10 @@ export class AgentRuntimeSnapshotProjector {
 				active: session.getActiveToolNames(),
 				available: session.getAllTools(),
 			},
+			resources: resourcesSnapshot(session),
+			modelRegistry: modelRegistrySnapshot(session),
+			diagnostics: diagnosticsSnapshot(session),
+			config: configSnapshot(session),
 		};
 	}
 
@@ -222,18 +413,29 @@ export class AgentRuntimeSnapshotProjector {
 	private handleSessionEvent(event: AgentSessionEvent): void {
 		switch (event.type) {
 			case "agent_start":
+				this.lastError = undefined;
 				this.emitStatusIfChanged("running");
 				break;
 			case "agent_end":
+				this.streamingMessage = undefined;
 				this.emitStatusIfChanged(this.session.isCompacting ? "compacting" : "idle");
 				break;
 			case "message_start":
+				if (event.message.role === "assistant") {
+					this.streamingMessage = event.message;
+				}
 				this.emit({ type: "message_start", message: event.message });
 				break;
 			case "message_update":
+				if (event.message.role === "assistant") {
+					this.streamingMessage = event.message;
+				}
 				this.emit({ type: "message_delta", message: event.message });
 				break;
 			case "message_end":
+				if (event.message.role === "assistant") {
+					this.streamingMessage = undefined;
+				}
 				this.emit({ type: "message_end", message: event.message });
 				break;
 			case "tool_execution_start": {
@@ -298,6 +500,7 @@ export class AgentRuntimeSnapshotProjector {
 				break;
 			case "auto_retry_end":
 				if (!event.success && event.finalError) {
+					this.lastError = event.finalError;
 					this.emit({ type: "error", message: event.finalError });
 				}
 				this.emitStatusIfChanged(statusFromSession(this.session));
@@ -315,6 +518,10 @@ export class AgentRuntimeSnapshotProjector {
 
 	private emit(event: AgentRuntimeEventDraft): void {
 		const withId = { id: this.nextEventId++, ...event } as AgentRuntimeEvent;
+		this.eventLog.push(withId);
+		if (this.eventLog.length > this.maxEventLogEntries) {
+			this.eventLog.splice(0, this.eventLog.length - this.maxEventLogEntries);
+		}
 		for (const listener of this.listeners) {
 			listener(withId);
 		}

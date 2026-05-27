@@ -1,16 +1,27 @@
 // Core session management
 
+export type { AgentMessage } from "@earendil-works/pi-agent-core";
 // Config paths
 export { getAgentDir, VERSION } from "./config.ts";
 export type {
 	AgentIdentitySnapshot,
+	AgentRuntimeAttachOptions,
+	AgentRuntimeAttachResult,
+	AgentRuntimeCapability,
 	AgentRuntimeEvent,
 	AgentRuntimeEventListener,
+	AgentRuntimeIdentity,
 	AgentRuntimeModelSnapshot,
 	AgentRuntimeSnapshot,
 	AgentRuntimeStatus,
+	InputRequiredSnapshot,
+	PendingApprovalSnapshot,
 	PendingUserMessageSnapshot,
 	RunSnapshot,
+	RuntimeConfigSnapshot,
+	RuntimeDiagnosticSnapshot,
+	RuntimeModelRegistrySnapshot,
+	RuntimeResourceSnapshot,
 	SessionSnapshot,
 	ToolExecutionSnapshot,
 	ToolExecutionStatus,
@@ -179,6 +190,7 @@ export { DefaultResourceLoader, loadProjectContextFiles } from "./core/resource-
 export {
 	AgentSessionRuntime,
 	type AgentSessionRuntimeDiagnostic,
+	type AgentSessionRuntimeOptions,
 	type AgentSessionServices,
 	type CreateAgentSessionFromServicesOptions,
 	type CreateAgentSessionOptions,

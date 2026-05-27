@@ -2,7 +2,12 @@ import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { resolvePath } from "../utils/paths.ts";
 import {
+	type AgentRuntimeAttachOptions,
+	type AgentRuntimeAttachResult,
+	type AgentRuntimeCapability,
+	type AgentRuntimeEvent,
 	type AgentRuntimeEventListener,
+	type AgentRuntimeIdentity,
 	type AgentRuntimeSnapshot,
 	AgentRuntimeSnapshotProjector,
 } from "./agent-runtime-snapshot.ts";
@@ -38,6 +43,12 @@ export type CreateAgentSessionRuntimeFactory = (options: {
 	sessionManager: SessionManager;
 	sessionStartEvent?: SessionStartEvent;
 }) => Promise<CreateAgentSessionRuntimeResult>;
+
+export interface AgentSessionRuntimeOptions {
+	identity?: Partial<AgentRuntimeIdentity>;
+	eventLogLimit?: number;
+	capabilities?: AgentRuntimeCapability[];
+}
 
 /**
  * Thrown when /import references a JSONL file path that does not exist.
@@ -86,13 +97,18 @@ export class AgentSessionRuntime {
 		createRuntime: CreateAgentSessionRuntimeFactory,
 		_diagnostics: AgentSessionRuntimeDiagnostic[] = [],
 		_modelFallbackMessage?: string,
+		options: AgentSessionRuntimeOptions = {},
 	) {
 		this._session = _session;
 		this._services = _services;
 		this.createRuntime = createRuntime;
 		this._diagnostics = _diagnostics;
 		this._modelFallbackMessage = _modelFallbackMessage;
-		this.snapshotProjector = new AgentRuntimeSnapshotProjector(_session);
+		this.snapshotProjector = new AgentRuntimeSnapshotProjector(_session, {
+			identity: options.identity,
+			eventLogLimit: options.eventLogLimit,
+			capabilities: options.capabilities,
+		});
 	}
 
 	get services(): AgentSessionServices {
@@ -121,6 +137,18 @@ export class AgentSessionRuntime {
 
 	subscribeRuntimeEvents(listener: AgentRuntimeEventListener): () => void {
 		return this.snapshotProjector.subscribe(listener);
+	}
+
+	attachRuntime(options?: AgentRuntimeAttachOptions): AgentRuntimeAttachResult {
+		return this.snapshotProjector.attach(options);
+	}
+
+	getRuntimeEventsAfter(eventId: number): AgentRuntimeEvent[] {
+		return this.snapshotProjector.getEventsAfter(eventId);
+	}
+
+	emitExtensionRuntimeEvent(namespace: string, payload: unknown): void {
+		this.snapshotProjector.emitExtensionEvent(namespace, payload);
 	}
 
 	setRebindSession(rebindSession?: (session: AgentSession) => Promise<void>): void {
@@ -414,6 +442,7 @@ export async function createAgentSessionRuntime(
 		agentDir: string;
 		sessionManager: SessionManager;
 		sessionStartEvent?: SessionStartEvent;
+		runtimeOptions?: AgentSessionRuntimeOptions;
 	},
 ): Promise<AgentSessionRuntime> {
 	assertSessionCwdExists(options.sessionManager, options.cwd);
@@ -424,6 +453,7 @@ export async function createAgentSessionRuntime(
 		createRuntime,
 		result.diagnostics,
 		result.modelFallbackMessage,
+		options.runtimeOptions,
 	);
 }
 

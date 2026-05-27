@@ -62,6 +62,9 @@ describe("Agent runtime snapshot", () => {
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.create(tempDir),
+			runtimeOptions: {
+				identity: { agentId: "backend", agentLabel: "Backend" },
+			},
 		});
 		await runtimeHost.session.bindExtensions({});
 
@@ -82,14 +85,26 @@ describe("Agent runtime snapshot", () => {
 		const snapshot = runtimeHost.getSnapshot();
 
 		expect(snapshot.protocolVersion).toBe(1);
+		expect(snapshot.capabilities).toContain("event_replay");
+		expect(snapshot.capabilities).toContain("extension_events");
+		expect(snapshot.eventCursor).toBe(0);
+		expect(snapshot.agent.agentId).toBe("backend");
+		expect(snapshot.agent.agentLabel).toBe("Backend");
 		expect(snapshot.agent.cwd).toBe(tempDir);
 		expect(snapshot.agent.status).toBe("idle");
 		expect(snapshot.session.sessionId).toBe(runtimeHost.session.sessionId);
+		expect(snapshot.agent.agentId).not.toBe(snapshot.session.sessionId);
 		expect(snapshot.session.sessionDir).toBe(runtimeHost.session.sessionManager.getSessionDir());
 		expect(snapshot.transcript.entries.every((entry) => entry.type !== "message")).toBe(true);
 		expect(snapshot.run.isStreaming).toBe(false);
+		expect(snapshot.run.streamingMessage).toBeUndefined();
+		expect(snapshot.run.pendingApprovals).toEqual([]);
 		expect(snapshot.run.pendingUserMessages).toEqual([]);
 		expect(snapshot.tools.active.length).toBeGreaterThan(0);
+		expect(snapshot.resources.skills).toEqual([]);
+		expect(snapshot.resources.promptTemplates).toEqual([]);
+		expect(snapshot.config.autoCompaction).toBeTypeOf("boolean");
+		expect(snapshot.config.steeringMode).toBe("one-at-a-time");
 	});
 
 	it("projects session events into attach protocol events", async () => {
@@ -106,9 +121,35 @@ describe("Agent runtime snapshot", () => {
 		expect(events.map((event) => event.type)).toContain("message_start");
 		expect(events.map((event) => event.type)).toContain("message_end");
 		expect(events.at(-1)?.id).toBe(events.length);
+		expect(runtimeHost.getSnapshot().eventCursor).toBe(events.at(-1)?.id);
+		expect(runtimeHost.getRuntimeEventsAfter(0).map((event) => event.id)).toEqual(events.map((event) => event.id));
+		const attachResult = runtimeHost.attachRuntime({ lastSeenEventId: 0 });
+		expect(attachResult.initialEvents.map((event) => event.id)).toEqual(events.map((event) => event.id));
+		expect(attachResult.initialEventsComplete).toBe(true);
+		attachResult.unsubscribe();
 
 		const snapshot = runtimeHost.getSnapshot();
 		expect(snapshot.transcript.entries.length).toBeGreaterThanOrEqual(2);
 		expect(snapshot.agent.status).toBe("idle");
+	});
+
+	it("emits namespaced extension runtime events", async () => {
+		const { runtimeHost } = await createRuntimeHost();
+		const events: AgentRuntimeEvent[] = [];
+		const unsubscribe = runtimeHost.subscribeRuntimeEvents((event) => {
+			events.push(event);
+		});
+
+		runtimeHost.emitExtensionRuntimeEvent("example.widget", { count: 1 });
+		unsubscribe();
+
+		expect(events).toEqual([
+			{
+				id: 1,
+				type: "extension_event",
+				namespace: "example.widget",
+				payload: { count: 1 },
+			},
+		]);
 	});
 });
