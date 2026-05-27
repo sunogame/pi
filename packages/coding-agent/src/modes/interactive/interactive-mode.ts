@@ -70,7 +70,9 @@ import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
+	TuiExtensionContext,
 } from "../../core/extensions/index.ts";
+import { TuiExtensionRunner } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
@@ -239,6 +241,7 @@ export interface InteractiveModeOptions {
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private runtimeClient: RuntimeClient;
+	private tuiExtensionRunner = new TuiExtensionRunner([]);
 	private settingsManager: SettingsManager;
 	private ui: TUI;
 	private chatContainer: Container;
@@ -507,13 +510,21 @@ export class InteractiveMode {
 
 		// Convert extension commands to SlashCommand format
 		const builtinCommandNames = new Set(slashCommands.map((c) => c.name));
-		const extensionCommands: SlashCommand[] = this.session.extensionRunner
+		const tuiCommands: SlashCommand[] = this.tuiExtensionRunner
 			.getRegisteredCommands()
 			.filter((cmd) => !builtinCommandNames.has(cmd.name))
 			.map((cmd) => ({
 				name: cmd.invocationName,
 				description: this.prefixAutocompleteDescription(cmd.description, cmd.sourceInfo),
 				getArgumentCompletions: cmd.getArgumentCompletions,
+			}));
+		const reservedCommandNames = new Set([...builtinCommandNames, ...tuiCommands.map((command) => command.name)]);
+		const runtimeCommands: SlashCommand[] = this.runtimeSnapshot.commands
+			.filter((cmd) => !reservedCommandNames.has(cmd.invocationName))
+			.map((cmd) => ({
+				name: cmd.invocationName,
+				description: this.prefixAutocompleteDescription(cmd.description, cmd.sourceInfo),
+				getArgumentCompletions: undefined,
 			}));
 
 		// Build skill commands from session.skills (if enabled)
@@ -531,7 +542,7 @@ export class InteractiveMode {
 		}
 
 		return new CombinedAutocompleteProvider(
-			[...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList],
+			[...slashCommands, ...templateCommands, ...tuiCommands, ...runtimeCommands, ...skillCommandList],
 			this.getRuntimeCwd(),
 			this.fdPath,
 		);
@@ -1576,6 +1587,7 @@ export class InteractiveMode {
 			},
 		});
 
+		this.refreshTuiExtensionRunner();
 		setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
 		this.setupAutocompleteProvider();
 
@@ -1583,6 +1595,18 @@ export class InteractiveMode {
 		this.setupExtensionShortcuts(extensionRunner);
 		this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
 		this.showStartupNoticesIfNeeded();
+	}
+
+	private refreshTuiExtensionRunner(): void {
+		this.tuiExtensionRunner = new TuiExtensionRunner(this.session.resourceLoader.getExtensions().tuiExtensions ?? []);
+	}
+
+	private createTuiExtensionContext(): TuiExtensionContext {
+		return {
+			ui: this.createExtensionUIContext(),
+			runtime: this.runtimeClient,
+			snapshot: this.runtimeSnapshot,
+		};
 	}
 
 	private applyRuntimeSettings(): void {
@@ -2637,6 +2661,11 @@ export class InteractiveMode {
 			if (text === "/quit") {
 				this.editor.setText("");
 				await this.shutdown();
+				return;
+			}
+			if (await this.tryExecuteTuiExtensionCommand(text)) {
+				this.editor.addToHistory?.(text);
+				this.editor.setText("");
 				return;
 			}
 
@@ -3872,11 +3901,33 @@ export class InteractiveMode {
 	private isExtensionCommand(text: string): boolean {
 		if (!text.startsWith("/")) return false;
 
-		const extensionRunner = this.session.extensionRunner;
+		const spaceIndex = text.indexOf(" ");
+		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		return (
+			!!this.tuiExtensionRunner.getCommand(commandName) ||
+			this.runtimeSnapshot.commands.some((command) => command.invocationName === commandName)
+		);
+	}
+
+	private async tryExecuteTuiExtensionCommand(text: string): Promise<boolean> {
+		if (!text.startsWith("/")) return false;
 
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		return !!extensionRunner.getCommand(commandName);
+		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
+		const command = this.tuiExtensionRunner.getCommand(commandName);
+		if (!command) return false;
+
+		try {
+			await command.handler(args, this.createTuiExtensionContext());
+		} catch (error) {
+			this.showExtensionError(
+				command.sourceInfo.path,
+				error instanceof Error ? error.message : String(error),
+				error instanceof Error ? error.stack : undefined,
+			);
+		}
+		return true;
 	}
 
 	private async flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void> {
