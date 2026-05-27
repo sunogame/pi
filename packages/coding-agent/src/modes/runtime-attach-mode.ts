@@ -11,7 +11,7 @@ import {
 	TUI,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
-import { APP_NAME, VERSION } from "../config.ts";
+import { APP_NAME, APP_TITLE, VERSION } from "../config.ts";
 import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../core/agent-runtime-snapshot.ts";
 import { FooterDataProvider } from "../core/footer-data-provider.ts";
 import { createIpcRuntimeClient, type IpcRuntimeClient } from "../core/ipc-runtime-client.ts";
@@ -70,6 +70,7 @@ class RuntimeAttachView {
 	private readonly header = new RuntimeAttachHeader();
 	private readonly statusContainer = new Container();
 	private readonly transcript: RuntimeTranscriptView;
+	private readonly pendingMessages = new RuntimePendingMessagesView();
 	private readonly help = new Text("", 1, 0);
 	private readonly editor: CustomEditor;
 	private readonly keybindings: KeybindingsManager;
@@ -117,6 +118,7 @@ class RuntimeAttachView {
 		this.root.addChild(this.header);
 		this.root.addChild(this.statusContainer);
 		this.root.addChild(this.transcript);
+		this.root.addChild(this.pendingMessages);
 		this.root.addChild(this.help);
 		this.root.addChild(this.editor);
 		this.root.addChild(this.footer);
@@ -239,12 +241,16 @@ class RuntimeAttachView {
 		this.header.renderSnapshot(snapshot);
 		this.renderStatus(snapshot);
 		this.transcript.renderSnapshot(snapshot, { populateHistory: true });
+		this.pendingMessages.renderSnapshot(snapshot);
 	}
 
 	private renderStatus(snapshot: AgentRuntimeSnapshot): void {
+		this.updateTerminalTitle(snapshot);
 		this.header.renderSnapshot(snapshot);
 		this.footerDataProvider.setCwd(snapshot.agent.cwd);
 		this.footer.setSnapshot(snapshot);
+		this.pendingMessages.renderSnapshot(snapshot);
+		this.tui.terminal.setProgress(snapshot.agent.status !== "idle" && snapshot.agent.status !== "waiting_input");
 		const statusParts = [
 			chalk.bold(snapshot.session.sessionName ?? snapshot.session.sessionId.slice(0, 8)),
 			chalk.dim(snapshot.agent.cwd),
@@ -258,6 +264,14 @@ class RuntimeAttachView {
 		this.renderRuntimeStatus(snapshot, statusParts.join("  "));
 		this.help.setText(chalk.dim("Enter sends prompt. Esc aborts. /abort aborts. /exit quits."));
 		this.tui.requestRender();
+	}
+
+	private updateTerminalTitle(snapshot: AgentRuntimeSnapshot): void {
+		const cwdName = snapshot.agent.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? snapshot.agent.cwd;
+		const sessionName = snapshot.session.sessionName;
+		this.tui.terminal.setTitle(
+			sessionName ? `${APP_TITLE} - ${sessionName} - ${cwdName}` : `${APP_TITLE} - ${cwdName}`,
+		);
 	}
 
 	private renderRuntimeStatus(snapshot: AgentRuntimeSnapshot, fallbackText: string): void {
@@ -345,6 +359,9 @@ class RuntimeAttachView {
 		switch (event.type) {
 			case "commands_changed":
 				this.setupAutocompleteProvider(snapshot);
+				break;
+			case "queue_changed":
+				this.pendingMessages.renderSnapshot(snapshot);
 				break;
 			case "auto_retry_start":
 				this.showLoader("retrying", `Retrying (${event.attempt}/${event.maxAttempts})...`);
@@ -493,6 +510,29 @@ class RuntimeAttachHeader extends Container {
 		return `${theme.fg("warning", "[Issues]")}\n${diagnostics
 			.map((diagnostic) => theme.fg("dim", `  ${diagnostic}`))
 			.join("\n")}`;
+	}
+}
+
+class RuntimePendingMessagesView extends Container {
+	private renderedKey = "";
+
+	renderSnapshot(snapshot: AgentRuntimeSnapshot): void {
+		const key = JSON.stringify(snapshot.run.pendingUserMessages);
+		if (this.renderedKey === key) {
+			return;
+		}
+		this.renderedKey = key;
+		this.clear();
+		if (snapshot.run.pendingUserMessages.length === 0) {
+			return;
+		}
+
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("muted", "[Queued messages]"), 1, 0));
+		for (const message of snapshot.run.pendingUserMessages) {
+			const label = message.kind === "follow_up" ? "follow-up" : "steer";
+			this.addChild(new Text(`${theme.fg("accent", label)} ${theme.fg("dim", message.text)}`, 1, 0));
+		}
 	}
 }
 
