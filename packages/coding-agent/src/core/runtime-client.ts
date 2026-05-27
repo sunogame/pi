@@ -3,13 +3,26 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { AgentRuntimeAttachResult, AgentRuntimeEvent, AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
 import type { ExtensionBindings, ModelCycleResult, PromptOptions } from "./agent-session.ts";
 import type { AgentSessionRuntime } from "./agent-session-runtime.ts";
-import type { SessionTreeNode } from "./session-manager.ts";
+import type { ToolDefinition } from "./extensions/index.ts";
+import type { BranchSummaryEntry, SessionTreeNode } from "./session-manager.ts";
 
 export type RuntimeQueueMode = "all" | "one-at-a-time";
 
 export type RuntimeNewSessionOptions = Parameters<AgentSessionRuntime["newSession"]>[0];
 export type RuntimeSwitchSessionOptions = Parameters<AgentSessionRuntime["switchSession"]>[1];
 export type RuntimeForkOptions = Parameters<AgentSessionRuntime["fork"]>[1];
+export type RuntimeNavigateTreeOptions = {
+	summarize?: boolean;
+	customInstructions?: string;
+	replaceInstructions?: boolean;
+	label?: string;
+};
+export type RuntimeNavigateTreeResult = {
+	editorText?: string;
+	cancelled: boolean;
+	aborted?: boolean;
+	summaryEntry?: BranchSummaryEntry;
+};
 
 export interface RuntimeClientAttachOptions {
 	lastSeenEventId?: number;
@@ -36,6 +49,9 @@ export interface RuntimeClient {
 	setSteeringMode(mode: RuntimeQueueMode): Promise<void>;
 	setFollowUpMode(mode: RuntimeQueueMode): Promise<void>;
 	getSessionTree(): Promise<SessionTreeNode[]>;
+	navigateTree(targetId: string, options?: RuntimeNavigateTreeOptions): Promise<RuntimeNavigateTreeResult>;
+	getToolDefinition(name: string): Promise<ToolDefinition | undefined>;
+	setLabel(entryId: string, label: string | undefined): Promise<void>;
 }
 
 export type AgentRuntimeStoreListener = (snapshot: AgentRuntimeSnapshot, event?: AgentRuntimeEvent) => void;
@@ -176,7 +192,6 @@ export class InProcessRuntimeClient implements RuntimeClient {
 
 	async waitForIdle(): Promise<void> {
 		await this.runtime.session.agent.waitForIdle();
-		this.refreshFromRuntime();
 	}
 
 	async newSession(options?: RuntimeNewSessionOptions): Promise<{ cancelled: boolean }> {
@@ -237,6 +252,21 @@ export class InProcessRuntimeClient implements RuntimeClient {
 
 	async getSessionTree(): Promise<SessionTreeNode[]> {
 		return this.runtime.session.sessionManager.getTree();
+	}
+
+	async navigateTree(targetId: string, options?: RuntimeNavigateTreeOptions): Promise<RuntimeNavigateTreeResult> {
+		const result = await this.runtime.session.navigateTree(targetId, options);
+		this.refreshFromRuntime();
+		return result;
+	}
+
+	async getToolDefinition(name: string): Promise<ToolDefinition | undefined> {
+		return this.runtime.session.getToolDefinition(name);
+	}
+
+	async setLabel(entryId: string, label: string | undefined): Promise<void> {
+		this.runtime.session.sessionManager.appendLabelChange(entryId, label);
+		this.refreshFromRuntime();
 	}
 
 	private refreshFromRuntime(): void {

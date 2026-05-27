@@ -195,6 +195,8 @@ export {
 	type RuntimeClient,
 	type RuntimeClientAttachOptions,
 	type RuntimeForkOptions,
+	type RuntimeNavigateTreeOptions,
+	type RuntimeNavigateTreeResult,
 	type RuntimeNewSessionOptions,
 	type RuntimeQueueMode,
 	type RuntimeSwitchSessionOptions,

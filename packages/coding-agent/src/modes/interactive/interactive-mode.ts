@@ -82,6 +82,7 @@ import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { createInProcessRuntimeClient, type RuntimeClient } from "../../core/runtime-client.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { buildSessionContext, type SessionContext, SessionManager } from "../../core/session-manager.ts";
+import type { SettingsManager } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
@@ -239,6 +240,7 @@ export interface InteractiveModeOptions {
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private runtimeClient: RuntimeClient;
+	private settingsManager: SettingsManager;
 	private ui: TUI;
 	private chatContainer: Container;
 	private pendingMessagesContainer: Container;
@@ -349,22 +351,17 @@ export class InteractiveMode {
 	private get session(): AgentSession {
 		return this.runtimeHost.session;
 	}
-	private get agent() {
-		return this.session.agent;
-	}
-	private get sessionManager() {
-		return this.session.sessionManager;
-	}
-	private get settingsManager() {
-		return this.session.settingsManager;
-	}
 	private get runtimeSnapshot(): AgentRuntimeSnapshot {
 		return this.runtimeClient.store.snapshot;
+	}
+	private getRuntimeCwd(): string {
+		return this.runtimeSnapshot.agent.cwd;
 	}
 
 	constructor(runtimeHost: AgentSessionRuntime, options: InteractiveModeOptions = {}) {
 		this.runtimeHost = runtimeHost;
 		this.runtimeClient = createInProcessRuntimeClient(runtimeHost);
+		this.settingsManager = runtimeHost.services.settingsManager;
 		this.options = options;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
 			this.resetExtensionUI();
@@ -392,7 +389,7 @@ export class InteractiveMode {
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
-		this.footerDataProvider = new FooterDataProvider(this.runtimeSnapshot.agent.cwd);
+		this.footerDataProvider = new FooterDataProvider(this.getRuntimeCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 
@@ -524,7 +521,7 @@ export class InteractiveMode {
 
 		return new CombinedAutocompleteProvider(
 			[...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList],
-			this.runtimeSnapshot.agent.cwd,
+			this.getRuntimeCwd(),
 			this.fdPath,
 		);
 	}
@@ -711,7 +708,7 @@ export class InteractiveMode {
 	 * Update terminal title with session name and cwd.
 	 */
 	private updateTerminalTitle(): void {
-		const cwdBasename = path.basename(this.runtimeSnapshot.agent.cwd);
+		const cwdBasename = path.basename(this.getRuntimeCwd());
 		const sessionName = this.runtimeSnapshot.session.sessionName;
 		if (sessionName) {
 			this.ui.terminal.setTitle(`${APP_TITLE} - ${sessionName} - ${cwdBasename}`);
@@ -806,7 +803,7 @@ export class InteractiveMode {
 
 		try {
 			const packageManager = new DefaultPackageManager({
-				cwd: this.sessionManager.getCwd(),
+				cwd: this.getRuntimeCwd(),
 				agentDir: getAgentDir(),
 				settingsManager: this.settingsManager,
 			});
@@ -944,7 +941,7 @@ export class InteractiveMode {
 	}
 
 	private formatContextPath(p: string): string {
-		const cwd = path.resolve(this.sessionManager.getCwd());
+		const cwd = path.resolve(this.runtimeSnapshot.agent.cwd);
 		const absolutePath = path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwd, p);
 		const relativePath = getCwdRelativePath(absolutePath, cwd);
 		if (relativePath !== undefined) {
@@ -1531,7 +1528,7 @@ export class InteractiveMode {
 					}
 				},
 				navigateTree: async (targetId, options) => {
-					const result = await this.session.navigateTree(targetId, {
+					const result = await this.runtimeClient.navigateTree(targetId, {
 						summarize: options?.summarize,
 						customInstructions: options?.customInstructions,
 						replaceInstructions: options?.replaceInstructions,
@@ -1581,7 +1578,7 @@ export class InteractiveMode {
 		configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
 		this.footer.setSession(this.session);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
-		this.footerDataProvider.setCwd(this.runtimeSnapshot.agent.cwd);
+		this.footerDataProvider.setCwd(this.getRuntimeCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
@@ -1598,6 +1595,7 @@ export class InteractiveMode {
 	private async rebindCurrentSession(): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
+		this.settingsManager = this.runtimeHost.services.settingsManager;
 		this.applyRuntimeSettings();
 		await this.bindCurrentSessionExtensions();
 		this.subscribeToAgent();
@@ -1612,6 +1610,13 @@ export class InteractiveMode {
 		stopThemeWatcher();
 		this.stop();
 		process.exit(1);
+	}
+
+	private runAsyncAction(action: () => Promise<void>, prefix = "Action failed"): void {
+		void action().catch((error) => {
+			const message = error instanceof Error ? error.message : String(error);
+			this.showError(`${prefix}: ${message}`);
+		});
 	}
 
 	private renderCurrentSessionState(): void {
@@ -1645,8 +1650,8 @@ export class InteractiveMode {
 		const createContext = (): ExtensionContext => ({
 			ui: this.createExtensionUIContext(),
 			hasUI: true,
-			cwd: this.sessionManager.getCwd(),
-			sessionManager: this.sessionManager,
+			cwd: this.getRuntimeCwd(),
+			sessionManager: this.session.sessionManager,
 			modelRegistry: this.session.modelRegistry,
 			model: this.session.model,
 			isIdle: () => !this.session.isStreaming,
@@ -2422,7 +2427,7 @@ export class InteractiveMode {
 					const now = Date.now();
 					if (now - this.lastEscapeTime < 500) {
 						if (action === "tree") {
-							void this.showTreeSelector();
+							this.runAsyncAction(() => this.showTreeSelector(), "Failed to show session tree");
 						} else {
 							this.showUserMessageSelector();
 						}
@@ -2452,7 +2457,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
 		this.defaultEditor.onAction("app.session.tree", () => {
-			void this.showTreeSelector();
+			this.runAsyncAction(() => this.showTreeSelector(), "Failed to show session tree");
 		});
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
@@ -2566,7 +2571,7 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/tree") {
-				void this.showTreeSelector();
+				this.runAsyncAction(() => this.showTreeSelector(), "Failed to show session tree");
 				this.editor.setText("");
 				return;
 			}
@@ -2771,7 +2776,7 @@ export class InteractiveMode {
 									},
 									this.getRegisteredToolDefinition(content.name),
 									this.ui,
-									this.sessionManager.getCwd(),
+									this.getRuntimeCwd(),
 								);
 								component.setExpanded(this.toolOutputExpanded);
 								this.chatContainer.addChild(component);
@@ -2840,7 +2845,7 @@ export class InteractiveMode {
 						},
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
-						this.sessionManager.getCwd(),
+						this.getRuntimeCwd(),
 					);
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
@@ -3181,7 +3186,7 @@ export class InteractiveMode {
 							},
 							this.getRegisteredToolDefinition(content.name),
 							this.ui,
-							this.sessionManager.getCwd(),
+							this.getRuntimeCwd(),
 						);
 						component.setExpanded(this.toolOutputExpanded);
 						this.chatContainer.addChild(component);
@@ -3536,7 +3541,7 @@ export class InteractiveMode {
 	}
 
 	private cycleThinkingLevel(): void {
-		void (async () => {
+		this.runAsyncAction(async () => {
 			const newLevel = await this.runtimeClient.cycleThinkingLevel();
 			if (newLevel === undefined) {
 				this.showStatus("Current model does not support thinking");
@@ -3545,7 +3550,7 @@ export class InteractiveMode {
 				this.updateEditorBorderColor();
 				this.showStatus(`Thinking level: ${newLevel}`);
 			}
-		})();
+		}, "Failed to cycle thinking level");
 	}
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
@@ -3803,7 +3808,7 @@ export class InteractiveMode {
 		if (allQueued.length === 0) {
 			this.updatePendingMessagesDisplay();
 			if (options?.abort) {
-				this.agent.abort();
+				void this.runtimeClient.abort();
 			}
 			return 0;
 		}
@@ -3813,7 +3818,7 @@ export class InteractiveMode {
 		this.editor.setText(combinedText);
 		this.updatePendingMessagesDisplay();
 		if (options?.abort) {
-			this.agent.abort();
+			void this.runtimeClient.abort();
 		}
 		return allQueued.length;
 	}
@@ -4336,7 +4341,7 @@ export class InteractiveMode {
 	}
 
 	private async handleCloneCommand(): Promise<void> {
-		const leafId = this.sessionManager.getLeafId();
+		const leafId = this.runtimeSnapshot.session.currentLeafId;
 		if (!leafId) {
 			this.showStatus("Nothing to clone yet");
 			return;
@@ -4359,7 +4364,7 @@ export class InteractiveMode {
 
 	private async showTreeSelector(initialSelectedId?: string): Promise<void> {
 		const tree = await this.runtimeClient.getSessionTree();
-		const realLeafId = this.sessionManager.getLeafId();
+		const realLeafId = this.runtimeSnapshot.session.currentLeafId;
 		const initialFilterMode = this.settingsManager.getTreeFilterMode();
 
 		if (tree.length === 0) {
@@ -4398,7 +4403,7 @@ export class InteractiveMode {
 
 							if (summaryChoice === undefined) {
 								// User pressed escape - re-show tree selector with same selection
-								void this.showTreeSelector(entryId);
+								this.runAsyncAction(() => this.showTreeSelector(entryId), "Failed to show session tree");
 								return;
 							}
 
@@ -4437,7 +4442,7 @@ export class InteractiveMode {
 					}
 
 					try {
-						const result = await this.session.navigateTree(entryId, {
+						const result = await this.runtimeClient.navigateTree(entryId, {
 							summarize: wantsSummary,
 							customInstructions,
 						});
@@ -4445,7 +4450,7 @@ export class InteractiveMode {
 						if (result.aborted) {
 							// Summarization aborted - re-show tree selector with same selection
 							this.showStatus("Branch summarization cancelled");
-							void this.showTreeSelector(entryId);
+							this.runAsyncAction(() => this.showTreeSelector(entryId), "Failed to show session tree");
 							return;
 						}
 						if (result.cancelled) {
@@ -4476,7 +4481,7 @@ export class InteractiveMode {
 					this.ui.requestRender();
 				},
 				(entryId, label) => {
-					this.sessionManager.appendLabelChange(entryId, label);
+					this.runAsyncAction(() => this.runtimeClient.setLabel(entryId, label), "Failed to update label");
 					this.ui.requestRender();
 				},
 				initialSelectedId,
@@ -4490,7 +4495,7 @@ export class InteractiveMode {
 		this.showSelector((done) => {
 			const selector = new SessionSelectorComponent(
 				(onProgress) =>
-					SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir(), onProgress),
+					SessionManager.list(this.getRuntimeCwd(), this.runtimeSnapshot.session.sessionDir, onProgress),
 				SessionManager.listAll,
 				async (sessionPath) => {
 					done();
@@ -4515,7 +4520,7 @@ export class InteractiveMode {
 					keybindings: this.keybindings,
 				},
 
-				this.sessionManager.getSessionFile(),
+				this.runtimeSnapshot.session.sessionFile,
 			);
 			return { component: selector, focus: selector };
 		});
@@ -5548,7 +5553,7 @@ export class InteractiveMode {
 			type: "user_bash",
 			command,
 			excludeFromContext,
-			cwd: this.sessionManager.getCwd(),
+			cwd: this.getRuntimeCwd(),
 		});
 
 		// If extension returned a full result, use it directly
@@ -5628,7 +5633,7 @@ export class InteractiveMode {
 	}
 
 	private async handleCompactCommand(customInstructions?: string): Promise<void> {
-		const entries = this.sessionManager.getEntries();
+		const entries = this.runtimeSnapshot.transcript.entries;
 		const messageCount = entries.filter((e) => e.type === "message").length;
 
 		if (messageCount < 2) {

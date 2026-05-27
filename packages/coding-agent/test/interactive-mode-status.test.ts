@@ -243,6 +243,16 @@ describe("InteractiveMode.showLoadedResources", () => {
 			sessionManager: {
 				getCwd: () => options.cwd ?? "/tmp/project",
 			},
+			runtimeClient: {
+				store: {
+					snapshot: {
+						agent: { cwd: options.cwd ?? "/tmp/project" },
+					},
+				},
+			},
+			runtimeSnapshot: {
+				agent: { cwd: options.cwd ?? "/tmp/project" },
+			},
 			session: {
 				promptTemplates: [],
 				extensionRunner: {

@@ -442,6 +442,22 @@ snapshot:
 
 This removes the requirement that a TUI and runtime are born together.
 
+The migration has three sub-stages:
+
+1. `RuntimeClient` and in-process store: route attach and high-level commands
+   through a client boundary while behavior remains local.
+2. TUI read/write migration: replace direct `AgentSession` reads and writes
+   with snapshot/store reads and `RuntimeClient` commands. APIs that currently
+   accept rich in-process objects, such as `setModel(Model<any>)`, are local
+   adapter APIs only; IPC clients must send stable model references instead.
+3. Imperative event handling migration: replace the remaining raw
+   `AgentSession.subscribe(handleEvent)` path with a store/runtime-event
+   listener so IPC mode does not depend on in-process `AgentSessionEvent`s.
+
+Large derived views should stay lazy. For example, the session tree is fetched
+through a `RuntimeClient.getSessionTree()` command instead of being embedded in
+every snapshot.
+
 ## Transport Stages
 
 1. In-process adapter: `AgentSessionRuntime.getSnapshot()` and
