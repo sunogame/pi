@@ -9,7 +9,7 @@ import {
 	TUI,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
-import type { AgentRuntimeSnapshot } from "../core/agent-runtime-snapshot.ts";
+import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../core/agent-runtime-snapshot.ts";
 import { createIpcRuntimeClient, type IpcRuntimeClient } from "../core/ipc-runtime-client.ts";
 import { createStreamRuntimeTransport } from "../core/runtime-transport.ts";
 import { RuntimeTranscriptView } from "./interactive/runtime-transcript-view.ts";
@@ -113,7 +113,7 @@ class RuntimeAttachView {
 
 			this.child.stderr.on("data", (chunk: Buffer) => {
 				this.childStderr = chunk.toString("utf8").trim().split("\n").at(-1) ?? "";
-				this.render(this.client.store.snapshot);
+				this.renderStatus(this.client.store.snapshot);
 			});
 			this.child.on("error", (error) => finish(error));
 			this.child.on("exit", (code, signal) => {
@@ -136,16 +136,21 @@ class RuntimeAttachView {
 				return undefined;
 			});
 
-			this.unsubscribeStore = this.client.store.subscribe((snapshot) => {
-				this.render(snapshot);
+			this.unsubscribeStore = this.client.store.subscribe((snapshot, event) => {
+				this.renderStatus(snapshot);
+				if (event) {
+					this.handleRuntimeEvent(event, snapshot);
+				} else {
+					this.transcript.renderSnapshot(snapshot, { populateHistory: true });
+				}
 			});
 			this.tui.start();
-			this.render(this.client.store.snapshot);
+			this.renderSnapshot(this.client.store.snapshot);
 
 			this.client
 				.attach()
 				.then(() => {
-					this.render(this.client.store.snapshot);
+					this.renderSnapshot(this.client.store.snapshot);
 				})
 				.catch((error: unknown) => {
 					finish(error instanceof Error ? error : new Error(String(error)));
@@ -171,16 +176,21 @@ class RuntimeAttachView {
 		}
 
 		this.lastError = undefined;
-		this.render(this.client.store.snapshot);
+		this.renderStatus(this.client.store.snapshot);
 		await this.client.prompt(text).catch((error: unknown) => this.setError(error));
 	}
 
 	private setError(error: unknown): void {
 		this.lastError = error instanceof Error ? error.message : String(error);
-		this.render(this.client.store.snapshot);
+		this.renderStatus(this.client.store.snapshot);
 	}
 
-	private render(snapshot: AgentRuntimeSnapshot): void {
+	private renderSnapshot(snapshot: AgentRuntimeSnapshot): void {
+		this.renderStatus(snapshot);
+		this.transcript.renderSnapshot(snapshot, { populateHistory: true });
+	}
+
+	private renderStatus(snapshot: AgentRuntimeSnapshot): void {
 		const statusParts = [
 			chalk.bold(snapshot.session.sessionName ?? snapshot.session.sessionId.slice(0, 8)),
 			chalk.dim(snapshot.agent.cwd),
@@ -192,9 +202,43 @@ class RuntimeAttachView {
 			statusParts.push(chalk.yellow(this.childStderr));
 		}
 		this.status.setText(statusParts.join("  "));
-		this.transcript.renderSnapshot(snapshot);
 		this.help.setText(chalk.dim("Enter sends prompt. Esc aborts. /abort aborts. /exit quits."));
 		this.tui.requestRender();
+	}
+
+	private handleRuntimeEvent(event: AgentRuntimeEvent, snapshot: AgentRuntimeSnapshot): void {
+		switch (event.type) {
+			case "message_start":
+				this.transcript.handleMessageStart(event.message);
+				break;
+			case "message_delta":
+				this.transcript.handleMessageDelta(event.message);
+				break;
+			case "message_end":
+				this.transcript.handleMessageEnd(event.message, snapshot.run.retryAttempt);
+				break;
+			case "tool_start":
+				this.transcript.handleToolStart(event.tool.toolName, event.tool.toolCallId, event.tool.input);
+				break;
+			case "tool_update":
+				this.transcript.handleToolUpdate(event.toolCallId, event.patch);
+				break;
+			case "tool_end":
+				this.transcript.handleToolEnd(
+					event.tool.toolName,
+					event.tool.toolCallId,
+					event.tool.input,
+					event.tool.result,
+					event.tool.isError ?? false,
+				);
+				break;
+			case "session_changed":
+			case "transcript_changed":
+				this.transcript.renderSnapshot(snapshot, { populateHistory: true });
+				break;
+			default:
+				break;
+		}
 	}
 }
 
