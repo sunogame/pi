@@ -1,7 +1,7 @@
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
+import type { ImageContent, Model, Transport } from "@earendil-works/pi-ai";
 import type { AgentRuntimeAttachResult, AgentRuntimeEvent, AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
-import type { ExtensionBindings, ModelCycleResult, PromptOptions } from "./agent-session.ts";
+import type { AgentSession, ExtensionBindings, ModelCycleResult, PromptOptions } from "./agent-session.ts";
 import type { AgentSessionRuntime } from "./agent-session-runtime.ts";
 import type { ToolDefinition } from "./extensions/index.ts";
 import type { BranchSummaryEntry, SessionTreeNode } from "./session-manager.ts";
@@ -23,6 +23,11 @@ export type RuntimeNavigateTreeResult = {
 	aborted?: boolean;
 	summaryEntry?: BranchSummaryEntry;
 };
+export type RuntimeCompactionResult = Awaited<ReturnType<AgentSession["compact"]>>;
+export type RuntimeBashResult = Awaited<ReturnType<AgentSession["executeBash"]>>;
+export type RuntimeBashOptions = Parameters<AgentSession["executeBash"]>[2];
+export type RuntimeSessionStats = ReturnType<AgentSession["getSessionStats"]>;
+export type RuntimeForkableUserMessage = ReturnType<AgentSession["getUserMessagesForForking"]>[number];
 
 export interface RuntimeClientAttachOptions {
 	lastSeenEventId?: number;
@@ -46,8 +51,38 @@ export interface RuntimeClient {
 	cycleModel(direction?: "forward" | "backward"): Promise<ModelCycleResult | undefined>;
 	setThinkingLevel(level: ThinkingLevel): Promise<void>;
 	cycleThinkingLevel(): Promise<ThinkingLevel | undefined>;
+	getAvailableThinkingLevels(): Promise<ThinkingLevel[]>;
+	setAutoCompactionEnabled(enabled: boolean): Promise<void>;
 	setSteeringMode(mode: RuntimeQueueMode): Promise<void>;
 	setFollowUpMode(mode: RuntimeQueueMode): Promise<void>;
+	setTransport(transport: Transport): Promise<void>;
+	setScopedModels(scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>): Promise<void>;
+	getQueuedMessages(): Promise<{ steering: string[]; followUp: string[] }>;
+	clearQueue(): Promise<{ steering: string[]; followUp: string[] }>;
+	steer(text: string, images?: ImageContent[]): Promise<void>;
+	followUp(text: string, images?: ImageContent[]): Promise<void>;
+	compact(customInstructions?: string): Promise<RuntimeCompactionResult>;
+	abortCompaction(): Promise<void>;
+	abortRetry(): Promise<void>;
+	abortBranchSummary(): Promise<void>;
+	reload(): Promise<void>;
+	exportToJsonl(outputPath?: string): Promise<string>;
+	exportToHtml(outputPath?: string): Promise<string>;
+	getLastAssistantText(): Promise<string | undefined>;
+	setSessionName(name: string): Promise<void>;
+	getSessionStats(): Promise<RuntimeSessionStats>;
+	getUserMessagesForForking(): Promise<RuntimeForkableUserMessage[]>;
+	abortBash(): Promise<void>;
+	executeBash(
+		command: string,
+		onChunk?: (chunk: string) => void,
+		options?: RuntimeBashOptions,
+	): Promise<RuntimeBashResult>;
+	recordBashResult(
+		command: string,
+		result: RuntimeBashResult,
+		options?: { excludeFromContext?: boolean },
+	): Promise<void>;
 	getSessionTree(): Promise<SessionTreeNode[]>;
 	navigateTree(targetId: string, options?: RuntimeNavigateTreeOptions): Promise<RuntimeNavigateTreeResult>;
 	getToolDefinition(name: string): Promise<ToolDefinition | undefined>;
@@ -240,6 +275,15 @@ export class InProcessRuntimeClient implements RuntimeClient {
 		return result;
 	}
 
+	async getAvailableThinkingLevels(): Promise<ThinkingLevel[]> {
+		return this.runtime.session.getAvailableThinkingLevels();
+	}
+
+	async setAutoCompactionEnabled(enabled: boolean): Promise<void> {
+		this.runtime.session.setAutoCompactionEnabled(enabled);
+		this.refreshFromRuntime();
+	}
+
 	async setSteeringMode(mode: RuntimeQueueMode): Promise<void> {
 		this.runtime.session.setSteeringMode(mode);
 		this.refreshFromRuntime();
@@ -247,6 +291,122 @@ export class InProcessRuntimeClient implements RuntimeClient {
 
 	async setFollowUpMode(mode: RuntimeQueueMode): Promise<void> {
 		this.runtime.session.setFollowUpMode(mode);
+		this.refreshFromRuntime();
+	}
+
+	async setTransport(transport: Transport): Promise<void> {
+		this.runtime.session.settingsManager.setTransport(transport);
+		this.runtime.session.agent.transport = transport;
+		this.refreshFromRuntime();
+	}
+
+	async setScopedModels(scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>): Promise<void> {
+		this.runtime.session.setScopedModels(scopedModels);
+		this.refreshFromRuntime();
+	}
+
+	async getQueuedMessages(): Promise<{ steering: string[]; followUp: string[] }> {
+		return {
+			steering: [...this.runtime.session.getSteeringMessages()],
+			followUp: [...this.runtime.session.getFollowUpMessages()],
+		};
+	}
+
+	async clearQueue(): Promise<{ steering: string[]; followUp: string[] }> {
+		const result = this.runtime.session.clearQueue();
+		this.refreshFromRuntime();
+		return result;
+	}
+
+	async steer(text: string, images?: ImageContent[]): Promise<void> {
+		await this.runtime.session.steer(text, images);
+		this.refreshFromRuntime();
+	}
+
+	async followUp(text: string, images?: ImageContent[]): Promise<void> {
+		await this.runtime.session.followUp(text, images);
+		this.refreshFromRuntime();
+	}
+
+	async compact(customInstructions?: string): Promise<RuntimeCompactionResult> {
+		try {
+			return await this.runtime.session.compact(customInstructions);
+		} finally {
+			this.refreshFromRuntime();
+		}
+	}
+
+	async abortCompaction(): Promise<void> {
+		this.runtime.session.abortCompaction();
+		this.refreshFromRuntime();
+	}
+
+	async abortRetry(): Promise<void> {
+		this.runtime.session.abortRetry();
+		this.refreshFromRuntime();
+	}
+
+	async abortBranchSummary(): Promise<void> {
+		this.runtime.session.abortBranchSummary();
+		this.refreshFromRuntime();
+	}
+
+	async reload(): Promise<void> {
+		try {
+			await this.runtime.session.reload();
+		} finally {
+			this.refreshFromRuntime();
+		}
+	}
+
+	async exportToJsonl(outputPath?: string): Promise<string> {
+		return this.runtime.session.exportToJsonl(outputPath);
+	}
+
+	async exportToHtml(outputPath?: string): Promise<string> {
+		return this.runtime.session.exportToHtml(outputPath);
+	}
+
+	async getLastAssistantText(): Promise<string | undefined> {
+		return this.runtime.session.getLastAssistantText();
+	}
+
+	async setSessionName(name: string): Promise<void> {
+		this.runtime.session.setSessionName(name);
+		this.refreshFromRuntime();
+	}
+
+	async getSessionStats(): Promise<RuntimeSessionStats> {
+		return this.runtime.session.getSessionStats();
+	}
+
+	async getUserMessagesForForking(): Promise<RuntimeForkableUserMessage[]> {
+		return this.runtime.session.getUserMessagesForForking();
+	}
+
+	async abortBash(): Promise<void> {
+		this.runtime.session.abortBash();
+		this.refreshFromRuntime();
+	}
+
+	async executeBash(
+		command: string,
+		onChunk?: (chunk: string) => void,
+		options?: RuntimeBashOptions,
+	): Promise<RuntimeBashResult> {
+		try {
+			return await this.runtime.session.executeBash(command, onChunk, options);
+		} finally {
+			this.refreshFromRuntime();
+		}
+	}
+
+	async recordBashResult(
+		command: string,
+		result: RuntimeBashResult,
+		options?: { excludeFromContext?: boolean },
+	): Promise<void> {
+		this.runtime.session.recordBashResult(command, result, options);
 		this.refreshFromRuntime();
 	}
 

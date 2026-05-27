@@ -354,6 +354,14 @@ export class InteractiveMode {
 	private get runtimeSnapshot(): AgentRuntimeSnapshot {
 		return this.runtimeClient.store.snapshot;
 	}
+
+	private get isRuntimeStreaming(): boolean {
+		return this.runtimeSnapshot.run.isStreaming;
+	}
+
+	private get isRuntimeCompacting(): boolean {
+		return this.runtimeSnapshot.agent.status === "compacting";
+	}
 	private getRuntimeCwd(): string {
 		return this.runtimeSnapshot.agent.cwd;
 	}
@@ -391,7 +399,7 @@ export class InteractiveMode {
 		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider(this.getRuntimeCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
-		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		this.footer.setAutoCompactEnabled(this.runtimeSnapshot.config.autoCompaction);
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
@@ -1493,7 +1501,7 @@ export class InteractiveMode {
 		await this.runtimeClient.bindUI({
 			uiContext,
 			abortHandler: () => {
-				this.restoreQueuedMessagesToEditor({ abort: true });
+				void this.restoreQueuedMessagesToEditor({ abort: true });
 			},
 			commandContextActions: {
 				waitForIdle: () => this.runtimeClient.waitForIdle(),
@@ -1556,7 +1564,7 @@ export class InteractiveMode {
 			},
 			shutdownHandler: () => {
 				this.shutdownRequested = true;
-				if (!this.session.isStreaming) {
+				if (!this.isRuntimeStreaming) {
 					void this.shutdown();
 				}
 			},
@@ -1577,7 +1585,7 @@ export class InteractiveMode {
 	private applyRuntimeSettings(): void {
 		configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
 		this.footer.setSession(this.session);
-		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		this.footer.setAutoCompactEnabled(this.runtimeSnapshot.config.autoCompaction);
 		this.footerDataProvider.setCwd(this.getRuntimeCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
@@ -1654,12 +1662,12 @@ export class InteractiveMode {
 			sessionManager: this.session.sessionManager,
 			modelRegistry: this.session.modelRegistry,
 			model: this.session.model,
-			isIdle: () => !this.session.isStreaming,
+			isIdle: () => !this.isRuntimeStreaming,
 			signal: this.session.agent.signal,
 			abort: () => {
-				this.restoreQueuedMessagesToEditor({ abort: true });
+				void this.restoreQueuedMessagesToEditor({ abort: true });
 			},
-			hasPendingMessages: () => this.session.pendingMessageCount > 0,
+			hasPendingMessages: () => this.runtimeSnapshot.run.pendingUserMessages.length > 0,
 			shutdown: () => {
 				this.shutdownRequested = true;
 			},
@@ -1667,7 +1675,7 @@ export class InteractiveMode {
 			compact: (options) => {
 				void (async () => {
 					try {
-						const result = await this.session.compact(options?.customInstructions);
+						const result = await this.runtimeClient.compact(options?.customInstructions);
 						options?.onComplete?.(result);
 					} catch (error) {
 						const err = error instanceof Error ? error : new Error(String(error));
@@ -1731,7 +1739,7 @@ export class InteractiveMode {
 			this.ui.requestRender();
 			return;
 		}
-		if (this.session.isStreaming && !this.loadingAnimation) {
+		if (this.isRuntimeStreaming && !this.loadingAnimation) {
 			this.statusContainer.clear();
 			this.loadingAnimation = this.createWorkingLoader();
 			this.statusContainer.addChild(this.loadingAnimation);
@@ -2412,10 +2420,10 @@ export class InteractiveMode {
 		// Set up handlers on defaultEditor - they use this.editor for text access
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
-			if (this.session.isStreaming) {
-				this.restoreQueuedMessagesToEditor({ abort: true });
+			if (this.isRuntimeStreaming) {
+				void this.restoreQueuedMessagesToEditor({ abort: true });
 			} else if (this.session.isBashRunning) {
-				this.session.abortBash();
+				void this.runtimeClient.abortBash();
 			} else if (this.isBashMode) {
 				this.editor.setText("");
 				this.isBashMode = false;
@@ -2429,7 +2437,7 @@ export class InteractiveMode {
 						if (action === "tree") {
 							this.runAsyncAction(() => this.showTreeSelector(), "Failed to show session tree");
 						} else {
-							this.showUserMessageSelector();
+							this.runAsyncAction(() => this.showUserMessageSelector(), "Failed to show user messages");
 						}
 						this.lastEscapeTime = 0;
 					} else {
@@ -2459,7 +2467,9 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.tree", () => {
 			this.runAsyncAction(() => this.showTreeSelector(), "Failed to show session tree");
 		});
-		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
+		this.defaultEditor.onAction("app.session.fork", () => {
+			this.runAsyncAction(() => this.showUserMessageSelector(), "Failed to show user messages");
+		});
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
 
 		this.defaultEditor.onChange = (text: string) => {
@@ -2561,8 +2571,8 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/fork") {
-				this.showUserMessageSelector();
 				this.editor.setText("");
+				await this.showUserMessageSelector();
 				return;
 			}
 			if (text === "/clone") {
@@ -2646,7 +2656,7 @@ export class InteractiveMode {
 			}
 
 			// Queue input during compaction (extension commands execute immediately)
-			if (this.session.isCompacting) {
+			if (this.isRuntimeCompacting) {
 				if (this.isExtensionCommand(text)) {
 					this.editor.addToHistory?.(text);
 					this.editor.setText("");
@@ -2659,7 +2669,7 @@ export class InteractiveMode {
 
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
-			if (this.session.isStreaming) {
+			if (this.isRuntimeStreaming) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
 				await this.runtimeClient.prompt(text, { streamingBehavior: "steer" });
@@ -2799,7 +2809,7 @@ export class InteractiveMode {
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
 					if (this.streamingMessage.stopReason === "aborted") {
-						const retryAttempt = this.session.retryAttempt;
+						const retryAttempt = this.runtimeSnapshot.run.retryAttempt;
 						errorMessage =
 							retryAttempt > 0
 								? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
@@ -2903,7 +2913,7 @@ export class InteractiveMode {
 				// Keep editor active; submissions are queued during compaction.
 				this.autoCompactionEscapeHandler = this.defaultEditor.onEscape;
 				this.defaultEditor.onEscape = () => {
-					this.session.abortCompaction();
+					void this.runtimeClient.abortCompaction();
 				};
 				this.statusContainer.clear();
 				const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
@@ -2969,7 +2979,7 @@ export class InteractiveMode {
 				// Set up escape to abort retry
 				this.retryEscapeHandler = this.defaultEditor.onEscape;
 				this.defaultEditor.onEscape = () => {
-					this.session.abortRetry();
+					void this.runtimeClient.abortRetry();
 				};
 				// Show retry indicator
 				this.statusContainer.clear();
@@ -3194,7 +3204,7 @@ export class InteractiveMode {
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
 							let errorMessage: string;
 							if (message.stopReason === "aborted") {
-								const retryAttempt = this.session.retryAttempt;
+								const retryAttempt = this.runtimeSnapshot.run.retryAttempt;
 								errorMessage =
 									retryAttempt > 0
 										? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
@@ -3494,7 +3504,7 @@ export class InteractiveMode {
 		if (!text) return;
 
 		// Queue input during compaction (extension commands execute immediately)
-		if (this.session.isCompacting) {
+		if (this.isRuntimeCompacting) {
 			if (this.isExtensionCommand(text)) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
@@ -3507,7 +3517,7 @@ export class InteractiveMode {
 
 		// Alt+Enter queues a follow-up message (waits until agent finishes)
 		// This handles extension commands (execute immediately), prompt template expansion, and queueing
-		if (this.session.isStreaming) {
+		if (this.isRuntimeStreaming) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
 			await this.runtimeClient.prompt(text, { streamingBehavior: "followUp" });
@@ -3522,12 +3532,14 @@ export class InteractiveMode {
 	}
 
 	private handleDequeue(): void {
-		const restored = this.restoreQueuedMessagesToEditor();
-		if (restored === 0) {
-			this.showStatus("No queued messages to restore");
-		} else {
-			this.showStatus(`Restored ${restored} queued message${restored > 1 ? "s" : ""} to editor`);
-		}
+		void (async () => {
+			const restored = await this.restoreQueuedMessagesToEditor();
+			if (restored === 0) {
+				this.showStatus("No queued messages to restore");
+			} else {
+				this.showStatus(`Restored ${restored} queued message${restored > 1 ? "s" : ""} to editor`);
+			}
+		})();
 	}
 
 	private updateEditorBorderColor(): void {
@@ -3741,13 +3753,14 @@ export class InteractiveMode {
 	 * Combines session queue and compaction queue.
 	 */
 	private getAllQueuedMessages(): { steering: string[]; followUp: string[] } {
+		const pendingMessages = this.runtimeSnapshot.run.pendingUserMessages;
 		return {
 			steering: [
-				...this.session.getSteeringMessages(),
+				...pendingMessages.filter((message) => message.kind === "steering").map((message) => message.text),
 				...this.compactionQueuedMessages.filter((msg) => msg.mode === "steer").map((msg) => msg.text),
 			],
 			followUp: [
-				...this.session.getFollowUpMessages(),
+				...pendingMessages.filter((message) => message.kind === "follow_up").map((message) => message.text),
 				...this.compactionQueuedMessages.filter((msg) => msg.mode === "followUp").map((msg) => msg.text),
 			],
 		};
@@ -3757,8 +3770,8 @@ export class InteractiveMode {
 	 * Clear all queued messages and return their contents.
 	 * Clears both session queue and compaction queue.
 	 */
-	private clearAllQueues(): { steering: string[]; followUp: string[] } {
-		const { steering, followUp } = this.session.clearQueue();
+	private async clearAllQueues(): Promise<{ steering: string[]; followUp: string[] }> {
+		const { steering, followUp } = await this.runtimeClient.clearQueue();
 		const compactionSteering = this.compactionQueuedMessages
 			.filter((msg) => msg.mode === "steer")
 			.map((msg) => msg.text);
@@ -3802,13 +3815,13 @@ export class InteractiveMode {
 		]);
 	}
 
-	private restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
-		const { steering, followUp } = this.clearAllQueues();
+	private async restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): Promise<number> {
+		const { steering, followUp } = await this.clearAllQueues();
 		const allQueued = [...steering, ...followUp];
 		if (allQueued.length === 0) {
 			this.updatePendingMessagesDisplay();
 			if (options?.abort) {
-				void this.runtimeClient.abort();
+				await this.runtimeClient.abort();
 			}
 			return 0;
 		}
@@ -3818,7 +3831,7 @@ export class InteractiveMode {
 		this.editor.setText(combinedText);
 		this.updatePendingMessagesDisplay();
 		if (options?.abort) {
-			void this.runtimeClient.abort();
+			await this.runtimeClient.abort();
 		}
 		return allQueued.length;
 	}
@@ -3850,8 +3863,8 @@ export class InteractiveMode {
 		this.compactionQueuedMessages = [];
 		this.updatePendingMessagesDisplay();
 
-		const restoreQueue = (error: unknown) => {
-			this.session.clearQueue();
+		const restoreQueue = async (error: unknown) => {
+			await this.runtimeClient.clearQueue();
 			this.compactionQueuedMessages = queuedMessages;
 			this.updatePendingMessagesDisplay();
 			this.showError(
@@ -3868,9 +3881,9 @@ export class InteractiveMode {
 					if (this.isExtensionCommand(message.text)) {
 						await this.runtimeClient.prompt(message.text);
 					} else if (message.mode === "followUp") {
-						await this.session.followUp(message.text);
+						await this.runtimeClient.followUp(message.text);
 					} else {
-						await this.session.steer(message.text);
+						await this.runtimeClient.steer(message.text);
 					}
 				}
 				this.updatePendingMessagesDisplay();
@@ -3898,7 +3911,7 @@ export class InteractiveMode {
 
 			// Send first prompt (starts streaming)
 			const promptPromise = this.runtimeClient.prompt(firstPrompt.text).catch((error) => {
-				restoreQueue(error);
+				void restoreQueue(error);
 			});
 
 			// Queue remaining messages
@@ -3906,15 +3919,15 @@ export class InteractiveMode {
 				if (this.isExtensionCommand(message.text)) {
 					await this.runtimeClient.prompt(message.text);
 				} else if (message.mode === "followUp") {
-					await this.session.followUp(message.text);
+					await this.runtimeClient.followUp(message.text);
 				} else {
-					await this.session.steer(message.text);
+					await this.runtimeClient.steer(message.text);
 				}
 			}
 			this.updatePendingMessagesDisplay();
 			void promptPromise;
 		} catch (error) {
-			restoreQueue(error);
+			await restoreQueue(error);
 		}
 	}
 
@@ -3952,7 +3965,7 @@ export class InteractiveMode {
 		this.showSelector((done) => {
 			const selector = new SettingsSelectorComponent(
 				{
-					autoCompact: this.session.autoCompactionEnabled,
+					autoCompact: this.runtimeSnapshot.config.autoCompaction,
 					showImages: this.settingsManager.getShowImages(),
 					imageWidthCells: this.settingsManager.getImageWidthCells(),
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
@@ -3981,7 +3994,7 @@ export class InteractiveMode {
 				},
 				{
 					onAutoCompactChange: (enabled) => {
-						this.session.setAutoCompactionEnabled(enabled);
+						void this.runtimeClient.setAutoCompactionEnabled(enabled);
 						this.footer.setAutoCompactEnabled(enabled);
 					},
 					onShowImagesChange: (enabled) => {
@@ -4017,8 +4030,7 @@ export class InteractiveMode {
 						void this.runtimeClient.setFollowUpMode(mode);
 					},
 					onTransportChange: (transport) => {
-						this.settingsManager.setTransport(transport);
-						this.session.agent.transport = transport;
+						void this.runtimeClient.setTransport(transport);
 					},
 					onHttpIdleTimeoutMsChange: (timeoutMs) => {
 						this.settingsManager.setHttpIdleTimeoutMs(timeoutMs);
@@ -4256,7 +4268,7 @@ export class InteractiveMode {
 			currentEnabledIds = enabledIds === null ? null : [...enabledIds];
 			if (enabledIds && enabledIds.length > 0 && enabledIds.length < allModels.length) {
 				const newScopedModels = await resolveModelScope(enabledIds, this.session.modelRegistry);
-				this.session.setScopedModels(
+				await this.runtimeClient.setScopedModels(
 					newScopedModels.map((sm) => ({
 						model: sm.model,
 						thinkingLevel: sm.thinkingLevel,
@@ -4264,7 +4276,7 @@ export class InteractiveMode {
 				);
 			} else {
 				// All enabled or none enabled = no filter
-				this.session.setScopedModels([]);
+				await this.runtimeClient.setScopedModels([]);
 			}
 			await this.updateAvailableProviderCount();
 			this.ui.requestRender();
@@ -4299,8 +4311,8 @@ export class InteractiveMode {
 		});
 	}
 
-	private showUserMessageSelector(): void {
-		const userMessages = this.session.getUserMessagesForForking();
+	private async showUserMessageSelector(): Promise<void> {
+		const userMessages = await this.runtimeClient.getUserMessagesForForking();
 
 		if (userMessages.length === 0) {
 			this.showStatus("No messages to fork from");
@@ -4428,7 +4440,7 @@ export class InteractiveMode {
 
 					if (wantsSummary) {
 						this.defaultEditor.onEscape = () => {
-							this.session.abortBranchSummary();
+							void this.runtimeClient.abortBranchSummary();
 						};
 						this.chatContainer.addChild(new Spacer(1));
 						summaryLoader = new Loader(
@@ -4977,11 +4989,11 @@ export class InteractiveMode {
 	// =========================================================================
 
 	private async handleReloadCommand(): Promise<void> {
-		if (this.session.isStreaming) {
+		if (this.isRuntimeStreaming) {
 			this.showWarning("Wait for the current response to finish before reloading.");
 			return;
 		}
-		if (this.session.isCompacting) {
+		if (this.isRuntimeCompacting) {
 			this.showWarning("Wait for compaction to finish before reloading.");
 			return;
 		}
@@ -5013,7 +5025,7 @@ export class InteractiveMode {
 		};
 
 		try {
-			await this.session.reload();
+			await this.runtimeClient.reload();
 			configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
 			this.keybindings.reload();
 			const activeHeader = this.customHeader ?? this.builtInHeader;
@@ -5062,10 +5074,10 @@ export class InteractiveMode {
 
 		try {
 			if (outputPath?.endsWith(".jsonl")) {
-				const filePath = this.session.exportToJsonl(outputPath);
+				const filePath = await this.runtimeClient.exportToJsonl(outputPath);
 				this.showStatus(`Session exported to: ${filePath}`);
 			} else {
-				const filePath = await this.session.exportToHtml(outputPath);
+				const filePath = await this.runtimeClient.exportToHtml(outputPath);
 				this.showStatus(`Session exported to: ${filePath}`);
 			}
 		} catch (error: unknown) {
@@ -5168,7 +5180,7 @@ export class InteractiveMode {
 		// Export to a temp file
 		const tmpFile = path.join(os.tmpdir(), "session.html");
 		try {
-			await this.session.exportToHtml(tmpFile);
+			await this.runtimeClient.exportToHtml(tmpFile);
 		} catch (error: unknown) {
 			this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
 			return;
@@ -5247,7 +5259,7 @@ export class InteractiveMode {
 	}
 
 	private async handleCopyCommand(): Promise<void> {
-		const text = this.session.getLastAssistantText();
+		const text = await this.runtimeClient.getLastAssistantText();
 		if (!text) {
 			this.showError("No agent messages to copy yet.");
 			return;
@@ -5275,47 +5287,49 @@ export class InteractiveMode {
 			return;
 		}
 
-		this.session.setSessionName(name);
+		void this.runtimeClient.setSessionName(name);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${name}`), 1, 0));
 		this.ui.requestRender();
 	}
 
 	private handleSessionCommand(): void {
-		const stats = this.session.getSessionStats();
-		const sessionName = this.runtimeSnapshot.session.sessionName;
+		void (async () => {
+			const stats = await this.runtimeClient.getSessionStats();
+			const sessionName = this.runtimeSnapshot.session.sessionName;
 
-		let info = `${theme.bold("Session Info")}\n\n`;
-		if (sessionName) {
-			info += `${theme.fg("dim", "Name:")} ${sessionName}\n`;
-		}
-		info += `${theme.fg("dim", "File:")} ${stats.sessionFile ?? "In-memory"}\n`;
-		info += `${theme.fg("dim", "ID:")} ${stats.sessionId}\n\n`;
-		info += `${theme.bold("Messages")}\n`;
-		info += `${theme.fg("dim", "User:")} ${stats.userMessages}\n`;
-		info += `${theme.fg("dim", "Assistant:")} ${stats.assistantMessages}\n`;
-		info += `${theme.fg("dim", "Tool Calls:")} ${stats.toolCalls}\n`;
-		info += `${theme.fg("dim", "Tool Results:")} ${stats.toolResults}\n`;
-		info += `${theme.fg("dim", "Total:")} ${stats.totalMessages}\n\n`;
-		info += `${theme.bold("Tokens")}\n`;
-		info += `${theme.fg("dim", "Input:")} ${stats.tokens.input.toLocaleString()}\n`;
-		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
-		if (stats.tokens.cacheRead > 0) {
-			info += `${theme.fg("dim", "Cache Read:")} ${stats.tokens.cacheRead.toLocaleString()}\n`;
-		}
-		if (stats.tokens.cacheWrite > 0) {
-			info += `${theme.fg("dim", "Cache Write:")} ${stats.tokens.cacheWrite.toLocaleString()}\n`;
-		}
-		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
+			let info = `${theme.bold("Session Info")}\n\n`;
+			if (sessionName) {
+				info += `${theme.fg("dim", "Name:")} ${sessionName}\n`;
+			}
+			info += `${theme.fg("dim", "File:")} ${stats.sessionFile ?? "In-memory"}\n`;
+			info += `${theme.fg("dim", "ID:")} ${stats.sessionId}\n\n`;
+			info += `${theme.bold("Messages")}\n`;
+			info += `${theme.fg("dim", "User:")} ${stats.userMessages}\n`;
+			info += `${theme.fg("dim", "Assistant:")} ${stats.assistantMessages}\n`;
+			info += `${theme.fg("dim", "Tool Calls:")} ${stats.toolCalls}\n`;
+			info += `${theme.fg("dim", "Tool Results:")} ${stats.toolResults}\n`;
+			info += `${theme.fg("dim", "Total:")} ${stats.totalMessages}\n\n`;
+			info += `${theme.bold("Tokens")}\n`;
+			info += `${theme.fg("dim", "Input:")} ${stats.tokens.input.toLocaleString()}\n`;
+			info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
+			if (stats.tokens.cacheRead > 0) {
+				info += `${theme.fg("dim", "Cache Read:")} ${stats.tokens.cacheRead.toLocaleString()}\n`;
+			}
+			if (stats.tokens.cacheWrite > 0) {
+				info += `${theme.fg("dim", "Cache Write:")} ${stats.tokens.cacheWrite.toLocaleString()}\n`;
+			}
+			info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
 
-		if (stats.cost > 0) {
-			info += `\n${theme.bold("Cost")}\n`;
-			info += `${theme.fg("dim", "Total:")} ${stats.cost.toFixed(4)}`;
-		}
+			if (stats.cost > 0) {
+				info += `\n${theme.bold("Cost")}\n`;
+				info += `${theme.fg("dim", "Total:")} ${stats.cost.toFixed(4)}`;
+			}
 
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(info, 1, 0));
-		this.ui.requestRender();
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(new Text(info, 1, 0));
+			this.ui.requestRender();
+		})();
 	}
 
 	private handleChangelogCommand(): void {
@@ -5562,7 +5576,7 @@ export class InteractiveMode {
 
 			// Create UI component for display
 			this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext);
-			if (this.session.isStreaming) {
+			if (this.isRuntimeStreaming) {
 				this.pendingMessagesContainer.addChild(this.bashComponent);
 				this.pendingBashComponents.push(this.bashComponent);
 			} else {
@@ -5581,14 +5595,14 @@ export class InteractiveMode {
 			);
 
 			// Record the result in session
-			this.session.recordBashResult(command, result, { excludeFromContext });
+			await this.runtimeClient.recordBashResult(command, result, { excludeFromContext });
 			this.bashComponent = undefined;
 			this.ui.requestRender();
 			return;
 		}
 
 		// Normal execution path (possibly with custom operations)
-		const isDeferred = this.session.isStreaming;
+		const isDeferred = this.isRuntimeStreaming;
 		this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext);
 
 		if (isDeferred) {
@@ -5602,7 +5616,7 @@ export class InteractiveMode {
 		this.ui.requestRender();
 
 		try {
-			const result = await this.session.executeBash(
+			const result = await this.runtimeClient.executeBash(
 				command,
 				(chunk) => {
 					if (this.bashComponent) {
@@ -5648,7 +5662,7 @@ export class InteractiveMode {
 		this.statusContainer.clear();
 
 		try {
-			await this.session.compact(customInstructions);
+			await this.runtimeClient.compact(customInstructions);
 		} catch {
 			// Ignore, will be emitted as an event
 		}

@@ -288,6 +288,8 @@ RuntimeClient command surface includes prompt control and session lifecycle:
 ```ts
 interface RuntimeClient {
   attach(options?: { lastSeenEventId?: number }): Promise<AttachResult>;
+  bindUI(bindings: ExtensionBindings): Promise<void>;
+  unbindUI(): Promise<void>;
   prompt(text: string, options?: unknown): Promise<void>;
   abort(): Promise<void>;
   waitForIdle(): Promise<void>;
@@ -295,6 +297,36 @@ interface RuntimeClient {
   switchSession(path: string, options?: unknown): Promise<{ cancelled: boolean }>;
   fork(entryId: string, options?: unknown): Promise<{ cancelled: boolean; selectedText?: string }>;
   importFromJsonl(path: string, cwdOverride?: string): Promise<{ cancelled: boolean }>;
+  setModel(model: Model<any>): Promise<void>; // in-process only; IPC uses stable model refs.
+  cycleModel(direction?: "forward" | "backward"): Promise<ModelCycleResult | undefined>;
+  setThinkingLevel(level: ThinkingLevel): Promise<void>;
+  cycleThinkingLevel(): Promise<ThinkingLevel | undefined>;
+  setAutoCompactionEnabled(enabled: boolean): Promise<void>;
+  setSteeringMode(mode: "all" | "one-at-a-time"): Promise<void>;
+  setFollowUpMode(mode: "all" | "one-at-a-time"): Promise<void>;
+  setTransport(transport: Transport): Promise<void>; // in-process only; IPC uses stable transport refs.
+  setScopedModels(scopedModels: ScopedModel[]): Promise<void>;
+  clearQueue(): Promise<{ steering: string[]; followUp: string[] }>;
+  steer(text: string, images?: ImageContent[]): Promise<void>;
+  followUp(text: string, images?: ImageContent[]): Promise<void>;
+  compact(customInstructions?: string): Promise<CompactionResult>;
+  abortCompaction(): Promise<void>;
+  abortRetry(): Promise<void>;
+  abortBranchSummary(): Promise<void>;
+  reload(): Promise<void>;
+  exportToJsonl(outputPath?: string): Promise<string>;
+  exportToHtml(outputPath?: string): Promise<string>;
+  getLastAssistantText(): Promise<string | undefined>;
+  setSessionName(name: string): Promise<void>;
+  getSessionStats(): Promise<SessionStats>;
+  getUserMessagesForForking(): Promise<Array<{ entryId: string; text: string }>>;
+  abortBash(): Promise<void>;
+  executeBash(command: string, onChunk?: (chunk: string) => void, options?: BashOptions): Promise<BashResult>;
+  recordBashResult(command: string, result: BashResult, options?: { excludeFromContext?: boolean }): Promise<void>;
+  getSessionTree(): Promise<SessionTreeNode[]>;
+  navigateTree(targetId: string, options?: NavigateTreeOptions): Promise<NavigateTreeResult>;
+  getToolDefinition(name: string): Promise<ToolDefinition | undefined>;
+  setLabel(entryId: string, label: string | undefined): Promise<void>;
 }
 ```
 
