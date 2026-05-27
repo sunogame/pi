@@ -103,7 +103,7 @@ interface AgentRuntimeSnapshot {
       displayName?: string;
     };
     thinkingLevel: string;
-    status: "idle" | "running" | "waiting_input" | "compacting" | "error";
+    status: "idle" | "running" | "retrying" | "waiting_input" | "compacting" | "error";
   };
   session: {
     sessionId: string;
@@ -206,7 +206,17 @@ type AgentRuntimeEvent =
   | { id: number; type: "input_resolved"; inputId: string }
   | { id: number; type: "extension_event"; namespace: string; payload: unknown }
   | { id: number; type: "compaction_start"; reason: string }
-  | { id: number; type: "compaction_end"; reason: string; aborted: boolean }
+  | {
+      id: number;
+      type: "compaction_end";
+      reason: string;
+      result?: CompactionResult;
+      aborted: boolean;
+      willRetry: boolean;
+      errorMessage?: string;
+    }
+  | { id: number; type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
+  | { id: number; type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
   | { id: number; type: "transcript_changed"; reason: "append" | "compaction" | "fork" | "import" }
   | { id: number; type: "error"; message: string };
 ```

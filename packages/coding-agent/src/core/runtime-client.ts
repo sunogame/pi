@@ -532,6 +532,22 @@ function applyRuntimeEvent(snapshot: AgentRuntimeSnapshot, event: AgentRuntimeEv
 		case "error":
 			return { ...next, agent: { ...next.agent, status: "error" }, run: { ...next.run, lastError: event.message } };
 		case "compaction_end":
+			return { ...next, agent: { ...next.agent, status: event.willRetry ? "running" : next.agent.status } };
+		case "auto_retry_start":
+			return {
+				...next,
+				agent: { ...next.agent, status: "retrying" },
+				run: { ...next.run, retryAttempt: event.attempt },
+			};
+		case "auto_retry_end":
+			return {
+				...next,
+				run: {
+					...next.run,
+					retryAttempt: event.success ? 0 : event.attempt,
+					lastError: event.finalError ?? next.run.lastError,
+				},
+			};
 		case "extension_event":
 		case "transcript_changed":
 			return next;

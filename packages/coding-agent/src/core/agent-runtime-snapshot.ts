@@ -4,7 +4,7 @@ import type { AgentSession, AgentSessionEvent } from "./agent-session.ts";
 import type { ToolInfo } from "./extensions/index.ts";
 import type { SessionEntry } from "./session-manager.ts";
 
-export type AgentRuntimeStatus = "idle" | "running" | "waiting_input" | "compacting" | "error";
+export type AgentRuntimeStatus = "idle" | "running" | "retrying" | "waiting_input" | "compacting" | "error";
 
 export interface AgentRuntimeModelSnapshot {
 	provider?: string;
@@ -149,7 +149,24 @@ export type AgentRuntimeEvent =
 	| { id: number; type: "input_resolved"; inputId: string }
 	| { id: number; type: "extension_event"; namespace: string; payload: unknown }
 	| { id: number; type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
-	| { id: number; type: "compaction_end"; reason: "manual" | "threshold" | "overflow"; aborted: boolean }
+	| {
+			id: number;
+			type: "compaction_end";
+			reason: "manual" | "threshold" | "overflow";
+			result?: { summary: string; firstKeptEntryId: string; tokensBefore: number; details?: unknown };
+			aborted: boolean;
+			willRetry: boolean;
+			errorMessage?: string;
+	  }
+	| {
+			id: number;
+			type: "auto_retry_start";
+			attempt: number;
+			maxAttempts: number;
+			delayMs: number;
+			errorMessage: string;
+	  }
+	| { id: number; type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { id: number; type: "transcript_changed"; reason: "append" | "compaction" | "fork" | "import" }
 	| { id: number; type: "error"; message: string };
 
@@ -203,6 +220,9 @@ function pendingUserMessages(session: AgentSession): PendingUserMessageSnapshot[
 function statusFromSession(session: AgentSession): AgentRuntimeStatus {
 	if (session.isCompacting) {
 		return "compacting";
+	}
+	if (session.isRetrying) {
+		return "retrying";
 	}
 	if (session.isStreaming) {
 		return "running";
@@ -494,8 +514,15 @@ export class AgentRuntimeSnapshotProjector {
 				this.emit({ type: "compaction_start", reason: event.reason });
 				break;
 			case "compaction_end":
-				this.emit({ type: "compaction_end", reason: event.reason, aborted: event.aborted });
-				if (!event.aborted) {
+				this.emit({
+					type: "compaction_end",
+					reason: event.reason,
+					result: event.result,
+					aborted: event.aborted,
+					willRetry: event.willRetry,
+					errorMessage: event.errorMessage,
+				});
+				if (event.result) {
 					this.emit({ type: "transcript_changed", reason: "compaction" });
 				}
 				this.emitStatusIfChanged(statusFromSession(this.session));
@@ -505,9 +532,22 @@ export class AgentRuntimeSnapshotProjector {
 				this.emit({ type: "session_changed", session: sessionSnapshot(this.session) });
 				break;
 			case "auto_retry_start":
-				this.emitStatusIfChanged("running");
+				this.emit({
+					type: "auto_retry_start",
+					attempt: event.attempt,
+					maxAttempts: event.maxAttempts,
+					delayMs: event.delayMs,
+					errorMessage: event.errorMessage,
+				});
+				this.emitStatusIfChanged("retrying");
 				break;
 			case "auto_retry_end":
+				this.emit({
+					type: "auto_retry_end",
+					success: event.success,
+					attempt: event.attempt,
+					finalError: event.finalError,
+				});
 				if (!event.success && event.finalError) {
 					this.lastError = event.finalError;
 					this.emit({ type: "error", message: event.finalError });

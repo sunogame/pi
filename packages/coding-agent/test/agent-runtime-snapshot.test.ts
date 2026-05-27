@@ -199,6 +199,23 @@ describe("Agent runtime snapshot", () => {
 		expect(client.store.snapshot.transcript.entries.filter((entry) => entry.type === "message")).toHaveLength(2);
 	});
 
+	it("delivers transcript_changed to in-process store subscribers", async () => {
+		const { runtimeHost } = await createRuntimeHost();
+		const client = createInProcessRuntimeClient(runtimeHost);
+		const events: AgentRuntimeEvent[] = [];
+		client.store.subscribe((_snapshot, event) => {
+			if (event) {
+				events.push(event);
+			}
+		});
+		await client.attach();
+
+		await runtimeHost.session.prompt("hello");
+
+		expect(events.some((event) => event.type === "transcript_changed")).toBe(true);
+		expect(client.store.snapshot.transcript.entries.filter((entry) => entry.type === "message")).toHaveLength(2);
+	});
+
 	it("binds and unbinds extension UI through the in-process runtime client", async () => {
 		const { runtimeHost } = await createRuntimeHost();
 		const client = createInProcessRuntimeClient(runtimeHost);
