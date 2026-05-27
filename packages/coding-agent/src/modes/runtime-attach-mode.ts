@@ -5,11 +5,13 @@ import {
 	Loader,
 	ProcessTerminal,
 	type SlashCommand,
+	Spacer,
 	setKeybindings,
 	Text,
 	TUI,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
+import { APP_NAME, VERSION } from "../config.ts";
 import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../core/agent-runtime-snapshot.ts";
 import { FooterDataProvider } from "../core/footer-data-provider.ts";
 import { createIpcRuntimeClient, type IpcRuntimeClient } from "../core/ipc-runtime-client.ts";
@@ -18,6 +20,7 @@ import { createStreamRuntimeTransport } from "../core/runtime-transport.ts";
 import { CountdownTimer } from "./interactive/components/countdown-timer.ts";
 import { CustomEditor } from "./interactive/components/custom-editor.ts";
 import { RuntimeFooterComponent } from "./interactive/components/footer.ts";
+import { keyHint, keyText, rawKeyHint } from "./interactive/components/keybinding-hints.ts";
 import { RuntimeTranscriptView } from "./interactive/runtime-transcript-view.ts";
 import { getEditorTheme, initTheme, theme } from "./interactive/theme/theme.ts";
 
@@ -64,6 +67,7 @@ class RuntimeAttachView {
 	private readonly client: IpcRuntimeClient;
 	private readonly child: ChildProcessWithoutNullStreams;
 	private readonly root = new Container();
+	private readonly header = new RuntimeAttachHeader();
 	private readonly statusContainer = new Container();
 	private readonly transcript: RuntimeTranscriptView;
 	private readonly help = new Text("", 1, 0);
@@ -110,6 +114,7 @@ class RuntimeAttachView {
 			this.editor.setText("");
 		});
 
+		this.root.addChild(this.header);
 		this.root.addChild(this.statusContainer);
 		this.root.addChild(this.transcript);
 		this.root.addChild(this.help);
@@ -231,11 +236,13 @@ class RuntimeAttachView {
 	}
 
 	private renderSnapshot(snapshot: AgentRuntimeSnapshot): void {
+		this.header.renderSnapshot(snapshot);
 		this.renderStatus(snapshot);
 		this.transcript.renderSnapshot(snapshot, { populateHistory: true });
 	}
 
 	private renderStatus(snapshot: AgentRuntimeSnapshot): void {
+		this.header.renderSnapshot(snapshot);
 		this.footerDataProvider.setCwd(snapshot.agent.cwd);
 		this.footer.setSnapshot(snapshot);
 		const statusParts = [
@@ -389,6 +396,103 @@ class RuntimeAttachView {
 			default:
 				break;
 		}
+	}
+}
+
+class RuntimeAttachHeader extends Container {
+	private renderedCursor: number | undefined;
+
+	renderSnapshot(snapshot: AgentRuntimeSnapshot): void {
+		if (this.renderedCursor === snapshot.eventCursor) {
+			return;
+		}
+		this.renderedCursor = snapshot.eventCursor;
+		this.clear();
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(this.formatHeader(), 1, 0));
+		const resources = this.formatResources(snapshot);
+		if (resources) {
+			this.addChild(new Spacer(1));
+			this.addChild(new Text(resources, 1, 0));
+		}
+		const diagnostics = this.formatDiagnostics(snapshot);
+		if (diagnostics) {
+			this.addChild(new Spacer(1));
+			this.addChild(new Text(diagnostics, 1, 0));
+		}
+		this.addChild(new Spacer(1));
+	}
+
+	private formatHeader(): string {
+		const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${VERSION} attach`);
+		const compactInstructions = [
+			keyHint("app.interrupt", "interrupt"),
+			rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
+			rawKeyHint("/", "runtime commands"),
+		].join(theme.fg("muted", " · "));
+		const boundary = theme.fg("dim", "IPC attach: model/auth, session tree, and legacy extension UI are disabled.");
+		return `${logo}\n${compactInstructions}\n${boundary}`;
+	}
+
+	private formatResources(snapshot: AgentRuntimeSnapshot): string {
+		const sections: string[] = [];
+		const agentsFiles = snapshot.resources.agentsFiles.map((file) => file.path);
+		if (agentsFiles.length > 0) {
+			sections.push(this.formatSection("Context", agentsFiles));
+		}
+		if (snapshot.resources.skills.length > 0) {
+			sections.push(
+				this.formatSection(
+					"Skills",
+					snapshot.resources.skills.map((skill) => skill.name),
+				),
+			);
+		}
+		if (snapshot.resources.promptTemplates.length > 0) {
+			sections.push(
+				this.formatSection(
+					"Prompts",
+					snapshot.resources.promptTemplates.map((prompt) => `/${prompt.name}`),
+				),
+			);
+		}
+		if (snapshot.resources.extensions.length > 0) {
+			sections.push(
+				this.formatSection(
+					"Extensions",
+					snapshot.resources.extensions.map((extension) => extension.path),
+				),
+			);
+		}
+		const themes = snapshot.resources.themes
+			.map((theme) => theme.name ?? theme.sourcePath)
+			.filter((value): value is string => value !== undefined);
+		if (themes.length > 0) {
+			sections.push(this.formatSection("Themes", themes));
+		}
+		return sections.join("\n");
+	}
+
+	private formatSection(name: string, values: string[]): string {
+		const body = values
+			.map((value) => value.trim())
+			.filter((value) => value.length > 0)
+			.sort((a, b) => a.localeCompare(b))
+			.join(", ");
+		return `${theme.fg("mdHeading", `[${name}]`)}\n${theme.fg("dim", `  ${body}`)}`;
+	}
+
+	private formatDiagnostics(snapshot: AgentRuntimeSnapshot): string {
+		const diagnostics = [
+			...snapshot.diagnostics.resources.map((diagnostic) => diagnostic.message),
+			...snapshot.diagnostics.extensions.map((diagnostic) => `${diagnostic.path}: ${diagnostic.error}`),
+		];
+		if (diagnostics.length === 0) {
+			return "";
+		}
+		return `${theme.fg("warning", "[Issues]")}\n${diagnostics
+			.map((diagnostic) => theme.fg("dim", `  ${diagnostic}`))
+			.join("\n")}`;
 	}
 }
 
