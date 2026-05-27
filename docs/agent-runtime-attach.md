@@ -275,6 +275,9 @@ Event hooks also have placement:
 If a TUI extension needs a low-level runtime hook, it should be split and the
 runtime half should forward semantic updates with `extension_event`.
 
+See [Extension Placement 2c](./extension-placement-2c.md) for the migration
+plan, compatibility policy, and completion criteria.
+
 ## Runtime Client
 
 The TUI should talk to a `RuntimeClient`, not directly to `AgentSessionRuntime`
