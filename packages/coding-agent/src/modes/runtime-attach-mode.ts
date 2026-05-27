@@ -82,6 +82,8 @@ class RuntimeAttachView {
 	private statusLoader: Loader | undefined;
 	private retryCountdown: CountdownTimer | undefined;
 	private statusKind: string | undefined;
+	private toolOutputExpanded = false;
+	private hideThinkingBlock = false;
 	private unsubscribeStore?: () => void;
 	private finish?: () => void;
 
@@ -113,6 +115,16 @@ class RuntimeAttachView {
 		};
 		this.editor.onAction("app.clear", () => {
 			this.editor.setText("");
+		});
+		this.editor.onAction("app.tools.expand", () => {
+			this.toolOutputExpanded = !this.toolOutputExpanded;
+			this.transcript.updateOptions({ toolOutputExpanded: this.toolOutputExpanded });
+			this.transcript.renderSnapshot(this.client.store.snapshot);
+		});
+		this.editor.onAction("app.thinking.toggle", () => {
+			this.hideThinkingBlock = !this.hideThinkingBlock;
+			this.transcript.updateOptions({ hideThinkingBlock: this.hideThinkingBlock });
+			this.transcript.renderSnapshot(this.client.store.snapshot);
 		});
 
 		this.root.addChild(this.header);
