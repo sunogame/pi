@@ -11,7 +11,7 @@ import {
 	createAgentSessionServices,
 } from "../src/core/agent-session-runtime.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import type { ExtensionUIContext } from "../src/core/extensions/index.ts";
+import type { ExtensionFactory, ExtensionUIContext, RuntimeExtensionAPI } from "../src/core/extensions/index.ts";
 import { createInProcessRuntimeClient } from "../src/core/runtime-client.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 
@@ -24,7 +24,7 @@ describe("Agent runtime snapshot", () => {
 		}
 	});
 
-	async function createRuntimeHost() {
+	async function createRuntimeHost(options: { extensionFactories?: ExtensionFactory[] } = {}) {
 		const tempDir = join(tmpdir(), `pi-runtime-snapshot-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 
@@ -42,6 +42,7 @@ describe("Agent runtime snapshot", () => {
 				noSkills: true,
 				noPromptTemplates: true,
 				noThemes: true,
+				extensionFactories: options.extensionFactories,
 			},
 		};
 		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
@@ -228,6 +229,26 @@ describe("Agent runtime snapshot", () => {
 
 		await client.unbindUI();
 		expect(runtimeHost.session.extensionRunner.hasUI()).toBe(false);
+	});
+
+	it("snapshots and executes runtime extension commands through the runtime client", async () => {
+		const calls: string[] = [];
+		const commandExtension = ((pi: RuntimeExtensionAPI) => {
+			pi.runtime.registerCommand("mark", {
+				description: "Mark from test",
+				handler: async (args) => {
+					calls.push(args);
+				},
+			});
+		}) as unknown as ExtensionFactory & { placement: "runtime" };
+		commandExtension.placement = "runtime";
+		const { runtimeHost } = await createRuntimeHost({ extensionFactories: [commandExtension] });
+		const client = createInProcessRuntimeClient(runtimeHost);
+
+		expect(client.store.snapshot.commands.map((command) => command.name)).toContain("mark");
+		await expect(client.executeCommand("mark", "hello")).resolves.toBe(true);
+		await expect(client.executeCommand("missing", "")).resolves.toBe(false);
+		expect(calls).toEqual(["hello"]);
 	});
 
 	it("loads the session tree lazily through the in-process runtime client", async () => {
