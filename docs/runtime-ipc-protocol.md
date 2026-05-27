@@ -50,9 +50,15 @@ These methods are the Phase 3 IPC-safe `RuntimeClient` surface:
 | `abort` | none | `{}` |
 | `waitForIdle` | none | `{}` |
 | `executeCommand` | `{ name: string; args: string }` | `{ handled: boolean }` |
+| `getSnapshot` | none | `{ snapshot: AgentRuntimeSnapshot }` |
 
 The IPC `attach` response cannot include an `unsubscribe` function. The client
 detaches by sending `detach` or closing the transport.
+
+`getSnapshot` is primarily an internal resynchronization primitive. Clients use
+it after events such as `transcript_changed`, where the event identifies that a
+fresh authoritative snapshot is required but does not carry the full
+transcript.
 
 ## Capabilities
 

@@ -196,6 +196,7 @@ export {
 } from "./core/extensions/index.ts";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
+export { createIpcRuntimeClient, IpcRuntimeClient } from "./core/ipc-runtime-client.ts";
 export { attachJsonlLineReader, serializeJsonLine } from "./core/jsonl.ts";
 export { convertToLlm } from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
@@ -225,6 +226,18 @@ export {
 	type RuntimeQueueMode,
 	type RuntimeSwitchSessionOptions,
 } from "./core/runtime-client.ts";
+export {
+	type RuntimeIpcAttachResult,
+	type RuntimeIpcError,
+	type RuntimeIpcErrorCode,
+	RuntimeIpcErrorResponse,
+	type RuntimeIpcMethod,
+	type RuntimeIpcNotification,
+	type RuntimeIpcRequest,
+	type RuntimeIpcRequestParams,
+	type RuntimeIpcResponse,
+	type RuntimeIpcResult,
+} from "./core/runtime-ipc.ts";
 export {
 	createStreamRuntimeTransport,
 	type RuntimeTransport,

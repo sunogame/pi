@@ -88,6 +88,7 @@ export {
 	type TurnStartEvent,
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
+export { createIpcRuntimeClient, IpcRuntimeClient } from "./ipc-runtime-client.ts";
 export { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 export {
 	AgentRuntimeStore,
@@ -104,6 +105,18 @@ export {
 	type RuntimeQueueMode,
 	type RuntimeSwitchSessionOptions,
 } from "./runtime-client.ts";
+export {
+	type RuntimeIpcAttachResult,
+	type RuntimeIpcError,
+	type RuntimeIpcErrorCode,
+	RuntimeIpcErrorResponse,
+	type RuntimeIpcMethod,
+	type RuntimeIpcNotification,
+	type RuntimeIpcRequest,
+	type RuntimeIpcRequestParams,
+	type RuntimeIpcResponse,
+	type RuntimeIpcResult,
+} from "./runtime-ipc.ts";
 export {
 	createStreamRuntimeTransport,
 	type RuntimeTransport,
