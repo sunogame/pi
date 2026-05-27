@@ -1,5 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { AgentRuntimeSnapshot } from "../../../core/agent-runtime-snapshot.ts";
 import type { AgentSession } from "../../../core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import { theme } from "../theme/theme.ts";
@@ -230,4 +231,123 @@ export class FooterComponent implements Component {
 
 		return lines;
 	}
+}
+
+export class RuntimeFooterComponent implements Component {
+	private snapshot: AgentRuntimeSnapshot;
+	private footerData: ReadonlyFooterDataProvider;
+
+	constructor(snapshot: AgentRuntimeSnapshot, footerData: ReadonlyFooterDataProvider) {
+		this.snapshot = snapshot;
+		this.footerData = footerData;
+	}
+
+	setSnapshot(snapshot: AgentRuntimeSnapshot): void {
+		this.snapshot = snapshot;
+	}
+
+	invalidate(): void {
+		// Git branch caching is handled by the provider.
+	}
+
+	dispose(): void {
+		// Git watcher cleanup is handled by the provider.
+	}
+
+	render(width: number): string[] {
+		const stats = calculateSnapshotStats(this.snapshot);
+		let pwd = formatCwdForFooter(this.snapshot.agent.cwd, process.env.HOME || process.env.USERPROFILE);
+		const branch = this.footerData.getGitBranch();
+		if (branch) {
+			pwd = `${pwd} (${branch})`;
+		}
+		if (this.snapshot.session.sessionName) {
+			pwd = `${pwd} • ${this.snapshot.session.sessionName}`;
+		}
+
+		const statsParts = [];
+		if (stats.totalInput) statsParts.push(`↑${formatTokens(stats.totalInput)}`);
+		if (stats.totalOutput) statsParts.push(`↓${formatTokens(stats.totalOutput)}`);
+		if (stats.totalCacheRead) statsParts.push(`R${formatTokens(stats.totalCacheRead)}`);
+		if (stats.totalCacheWrite) statsParts.push(`W${formatTokens(stats.totalCacheWrite)}`);
+		if (stats.totalCost) statsParts.push(`$${stats.totalCost.toFixed(3)}`);
+		statsParts.push(this.snapshot.config.autoCompaction ? "?/ctx (auto)" : "?/ctx");
+
+		let statsLeft = statsParts.join(" ");
+		let statsLeftWidth = visibleWidth(statsLeft);
+		if (statsLeftWidth > width) {
+			statsLeft = truncateToWidth(statsLeft, width, "...");
+			statsLeftWidth = visibleWidth(statsLeft);
+		}
+
+		const modelName = this.snapshot.agent.model.displayName ?? this.snapshot.agent.model.modelId ?? "no-model";
+		const rightSide =
+			this.snapshot.agent.thinkingLevel === "off"
+				? modelName
+				: `${modelName} • ${this.snapshot.agent.thinkingLevel}`;
+		const rightSideWidth = visibleWidth(rightSide);
+		const minPadding = 2;
+		const totalNeeded = statsLeftWidth + minPadding + rightSideWidth;
+		let statsLine: string;
+		if (totalNeeded <= width) {
+			statsLine = statsLeft + " ".repeat(width - statsLeftWidth - rightSideWidth) + rightSide;
+		} else {
+			const availableForRight = width - statsLeftWidth - minPadding;
+			if (availableForRight > 0) {
+				const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
+				const padding = " ".repeat(Math.max(0, width - statsLeftWidth - visibleWidth(truncatedRight)));
+				statsLine = statsLeft + padding + truncatedRight;
+			} else {
+				statsLine = statsLeft;
+			}
+		}
+
+		const dimStatsLeft = theme.fg("dim", statsLeft);
+		const dimRemainder = theme.fg("dim", statsLine.slice(statsLeft.length));
+		const lines = [truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "...")), dimStatsLeft + dimRemainder];
+
+		const extensionStatuses = this.footerData.getExtensionStatuses();
+		if (extensionStatuses.size > 0) {
+			const statusLine = Array.from(extensionStatuses.entries())
+				.sort(([a], [b]) => a.localeCompare(b))
+				.map(([, text]) => sanitizeStatusText(text))
+				.join(" ");
+			lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+		}
+
+		return lines;
+	}
+}
+
+function calculateSnapshotStats(snapshot: AgentRuntimeSnapshot): {
+	totalInput: number;
+	totalOutput: number;
+	totalCacheRead: number;
+	totalCacheWrite: number;
+	totalCost: number;
+} {
+	let totalInput = 0;
+	let totalOutput = 0;
+	let totalCacheRead = 0;
+	let totalCacheWrite = 0;
+	let totalCost = 0;
+
+	for (const entry of snapshot.transcript.entries) {
+		if (entry.type !== "message" || entry.message.role !== "assistant") {
+			continue;
+		}
+		totalInput += entry.message.usage.input;
+		totalOutput += entry.message.usage.output;
+		totalCacheRead += entry.message.usage.cacheRead;
+		totalCacheWrite += entry.message.usage.cacheWrite;
+		totalCost += entry.message.usage.cost.total;
+	}
+
+	return {
+		totalInput,
+		totalOutput,
+		totalCacheRead,
+		totalCacheWrite,
+		totalCost,
+	};
 }

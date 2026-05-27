@@ -2,12 +2,14 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { Container, ProcessTerminal, setKeybindings, Text, TUI } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../core/agent-runtime-snapshot.ts";
+import { FooterDataProvider } from "../core/footer-data-provider.ts";
 import { createIpcRuntimeClient, type IpcRuntimeClient } from "../core/ipc-runtime-client.ts";
 import { KeybindingsManager } from "../core/keybindings.ts";
 import { createStreamRuntimeTransport } from "../core/runtime-transport.ts";
 import { CustomEditor } from "./interactive/components/custom-editor.ts";
+import { RuntimeFooterComponent } from "./interactive/components/footer.ts";
 import { RuntimeTranscriptView } from "./interactive/runtime-transcript-view.ts";
-import { getEditorTheme, initTheme } from "./interactive/theme/theme.ts";
+import { getEditorTheme, initTheme, theme } from "./interactive/theme/theme.ts";
 
 export function toRuntimeIpcArgs(args: readonly string[]): string[] {
 	const next = [...args];
@@ -57,6 +59,8 @@ class RuntimeAttachView {
 	private readonly help = new Text("", 1, 0);
 	private readonly editor: CustomEditor;
 	private readonly keybindings: KeybindingsManager;
+	private readonly footerDataProvider: FooterDataProvider;
+	private readonly footer: RuntimeFooterComponent;
 	private stopped = false;
 	private lastError: string | undefined;
 	private childStderr = "";
@@ -69,6 +73,8 @@ class RuntimeAttachView {
 		this.child = child;
 		this.keybindings = KeybindingsManager.create();
 		setKeybindings(this.keybindings);
+		this.footerDataProvider = new FooterDataProvider(client.store.snapshot.agent.cwd);
+		this.footer = new RuntimeFooterComponent(client.store.snapshot, this.footerDataProvider);
 		this.transcript = new RuntimeTranscriptView({
 			tui,
 			cwd: client.store.snapshot.agent.cwd,
@@ -94,6 +100,7 @@ class RuntimeAttachView {
 		this.root.addChild(this.transcript);
 		this.root.addChild(this.help);
 		this.root.addChild(this.editor);
+		this.root.addChild(this.footer);
 		this.tui.addChild(this.root);
 		this.tui.setFocus(this.editor);
 	}
@@ -106,6 +113,7 @@ class RuntimeAttachView {
 				}
 				this.stopped = true;
 				this.unsubscribeStore?.();
+				this.footerDataProvider.dispose();
 				this.client.close();
 				if (!this.child.killed) {
 					this.child.kill("SIGTERM");
@@ -176,10 +184,31 @@ class RuntimeAttachView {
 			await this.client.abort().catch((error: unknown) => this.setError(error));
 			return;
 		}
+		if (trimmed.startsWith("/")) {
+			await this.executeRuntimeCommand(trimmed);
+			return;
+		}
 
 		this.lastError = undefined;
 		this.renderStatus(this.client.store.snapshot);
 		await this.client.prompt(text).catch((error: unknown) => this.setError(error));
+	}
+
+	private async executeRuntimeCommand(input: string): Promise<void> {
+		const command = parseRuntimeCommand(input);
+		if (!command) {
+			return;
+		}
+		this.lastError = undefined;
+		try {
+			const handled = await this.client.executeCommand(command.name, command.args);
+			if (!handled) {
+				this.status.setText(theme.fg("warning", `Unsupported command in attach mode: /${command.name}`));
+				this.tui.requestRender();
+			}
+		} catch (error: unknown) {
+			this.setError(error);
+		}
 	}
 
 	private setError(error: unknown): void {
@@ -193,6 +222,8 @@ class RuntimeAttachView {
 	}
 
 	private renderStatus(snapshot: AgentRuntimeSnapshot): void {
+		this.footerDataProvider.setCwd(snapshot.agent.cwd);
+		this.footer.setSnapshot(snapshot);
 		const statusParts = [
 			chalk.bold(snapshot.session.sessionName ?? snapshot.session.sessionId.slice(0, 8)),
 			chalk.dim(snapshot.agent.cwd),
@@ -242,6 +273,25 @@ class RuntimeAttachView {
 				break;
 		}
 	}
+}
+
+export function parseRuntimeCommand(input: string): { name: string; args: string } | undefined {
+	const trimmed = input.trim();
+	if (!trimmed.startsWith("/")) {
+		return undefined;
+	}
+	const command = trimmed.slice(1).trim();
+	if (!command) {
+		return undefined;
+	}
+	const match = command.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+	if (!match) {
+		return undefined;
+	}
+	return {
+		name: match[1],
+		args: match[2] ?? "",
+	};
 }
 
 function formatStatus(snapshot: AgentRuntimeSnapshot): string {
