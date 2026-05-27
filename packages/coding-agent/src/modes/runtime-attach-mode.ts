@@ -1,5 +1,4 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
 	Container,
 	Editor,
@@ -13,8 +12,8 @@ import chalk from "chalk";
 import type { AgentRuntimeSnapshot } from "../core/agent-runtime-snapshot.ts";
 import { createIpcRuntimeClient, type IpcRuntimeClient } from "../core/ipc-runtime-client.ts";
 import { createStreamRuntimeTransport } from "../core/runtime-transport.ts";
-
-const MAX_TRANSCRIPT_ENTRIES = 80;
+import { RuntimeTranscriptView } from "./interactive/runtime-transcript-view.ts";
+import { initTheme } from "./interactive/theme/theme.ts";
 
 export function toRuntimeIpcArgs(args: readonly string[]): string[] {
 	const next = [...args];
@@ -34,6 +33,7 @@ export async function runRuntimeAttachMode(args: readonly string[] = process.arg
 		createStreamRuntimeTransport(child.stdout, child.stdin),
 		createPlaceholderSnapshot(process.cwd()),
 	);
+	initTheme(undefined, true);
 	const tui = new TUI(new ProcessTerminal(), true);
 	const view = new RuntimeAttachView(tui, client, child);
 
@@ -59,7 +59,7 @@ class RuntimeAttachView {
 	private readonly child: ChildProcessWithoutNullStreams;
 	private readonly root = new Container();
 	private readonly status = new Text("", 1, 0);
-	private readonly transcript = new Text("", 1, 0);
+	private readonly transcript: RuntimeTranscriptView;
 	private readonly help = new Text("", 1, 0);
 	private readonly editor: Editor;
 	private stopped = false;
@@ -72,6 +72,11 @@ class RuntimeAttachView {
 		this.tui = tui;
 		this.client = client;
 		this.child = child;
+		this.transcript = new RuntimeTranscriptView({
+			tui,
+			cwd: client.store.snapshot.agent.cwd,
+			onPopulateHistory: (text) => this.editor.addToHistory(text),
+		});
 		this.editor = new Editor(tui, createEditorTheme(), { paddingX: 1 });
 		this.editor.onSubmit = (text) => {
 			void this.submit(text);
@@ -187,7 +192,7 @@ class RuntimeAttachView {
 			statusParts.push(chalk.yellow(this.childStderr));
 		}
 		this.status.setText(statusParts.join("  "));
-		this.transcript.setText(formatTranscript(snapshot));
+		this.transcript.renderSnapshot(snapshot);
 		this.help.setText(chalk.dim("Enter sends prompt. Esc aborts. /abort aborts. /exit quits."));
 		this.tui.requestRender();
 	}
@@ -207,80 +212,6 @@ function formatStatus(snapshot: AgentRuntimeSnapshot): string {
 		suffixes.push(`${tools} tool${tools === 1 ? "" : "s"}`);
 	}
 	return suffixes.length > 0 ? `${status} (${suffixes.join(", ")})` : status;
-}
-
-function formatTranscript(snapshot: AgentRuntimeSnapshot): string {
-	const lines: string[] = [];
-	const entries = snapshot.transcript.entries.slice(-MAX_TRANSCRIPT_ENTRIES);
-	for (const entry of entries) {
-		const record = entry as { type?: string; message?: AgentMessage; content?: unknown; result?: unknown };
-		if (record.message) {
-			lines.push(formatMessage(record.message));
-		} else if (record.type === "tool-result") {
-			lines.push(`${chalk.cyan("tool")} ${formatUnknown(record.result ?? record.content)}`);
-		}
-	}
-	if (snapshot.run.streamingMessage) {
-		lines.push(formatMessage(snapshot.run.streamingMessage));
-	}
-	if (snapshot.run.activeToolExecutions.length > 0) {
-		for (const tool of snapshot.run.activeToolExecutions) {
-			lines.push(`${chalk.cyan("tool")} ${tool.toolName}: ${tool.status}`);
-		}
-	}
-	return lines.length > 0 ? lines.join("\n\n") : chalk.dim("No transcript yet.");
-}
-
-function formatMessage(message: AgentMessage): string {
-	const role = "role" in message ? String(message.role) : "assistant";
-	const label =
-		role === "user" ? chalk.green("user") : role === "assistant" ? chalk.blue("assistant") : chalk.magenta(role);
-	const content = "content" in message ? formatContent(message.content) : formatUnknown(message);
-	return `${label}\n${content}`;
-}
-
-function formatContent(content: unknown): string {
-	if (typeof content === "string") {
-		return content;
-	}
-	if (Array.isArray(content)) {
-		return content.map(formatContentPart).join("");
-	}
-	return formatUnknown(content);
-}
-
-function formatContentPart(part: unknown): string {
-	if (typeof part === "string") {
-		return part;
-	}
-	if (!part || typeof part !== "object") {
-		return formatUnknown(part);
-	}
-	const record = part as Record<string, unknown>;
-	if (typeof record.text === "string") {
-		return record.text;
-	}
-	if (typeof record.content === "string") {
-		return record.content;
-	}
-	if (typeof record.type === "string") {
-		return `[${record.type}]`;
-	}
-	return formatUnknown(part);
-}
-
-function formatUnknown(value: unknown): string {
-	if (value === undefined) {
-		return "";
-	}
-	if (typeof value === "string") {
-		return value;
-	}
-	try {
-		return JSON.stringify(value);
-	} catch {
-		return String(value);
-	}
 }
 
 function createEditorTheme(): EditorTheme {

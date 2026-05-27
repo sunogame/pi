@@ -32,8 +32,13 @@ The target model is closer to `tmux`:
   `--mode attach-ipc`, and validates reconnect/buffer-overflow replay behavior.
   The protocol baseline is defined in
   [Runtime IPC Protocol](./runtime-ipc-protocol.md).
-- **Phase 4 - Supervisor / Multi Runtime:** planned. Adds a supervisor, runtime
-  discovery, multi-agent attach switching, and service discovery.
+- **Phase 4 - Full TUI Attach:** in progress. Replaces the minimal
+  `--mode attach-ipc` debug UI with the normal pi transcript/editor/status
+  experience backed by `IpcRuntimeClient`. Local-only capabilities such as
+  model/auth pickers and legacy extension surfaces stay hidden or disabled
+  until they have serializable APIs.
+- **Phase 5 - Supervisor / Multi Runtime:** planned. Adds a supervisor,
+  runtime discovery, multi-agent attach switching, and service discovery.
 
 ## Process Model
 
@@ -332,6 +337,28 @@ raw `Model<any>` selection, `Transport` object mutation, legacy extension
 command context injection, and full tool definitions. Phase 3 IPC clients must
 not pretend to support those methods until protocol-specific serializable APIs
 exist.
+
+## Phase 4 Full TUI Attach
+
+Phase 4 makes `--mode attach-ipc` use the normal pi TUI instead of the minimal
+debug transcript. The target split is:
+
+- `InteractiveMode` owns terminal layout, editor behavior, keybindings,
+  markdown/message/tool rendering, and local view state;
+- `RuntimeClient` owns runtime state through `snapshot`, ordered events, and
+  IPC-safe commands;
+- local interactive mode uses `InProcessRuntimeClient`;
+- attach mode uses `IpcRuntimeClient`.
+
+Phase 4 is complete when `./pi-test.sh --mode attach-ipc` renders the same
+transcript components as normal pi for user messages, assistant streaming,
+tool calls, tool results, errors, compaction summaries, and active tool
+executions. Any entry point that still requires local-only protocol gaps must
+be hidden, disabled, or explicitly marked unsupported rather than reaching
+into `AgentSession`.
+
+Phase 4 does not include multi-agent discovery or attach switching. Those are
+Phase 5 supervisor responsibilities.
 
 ## Import Boundary
 
