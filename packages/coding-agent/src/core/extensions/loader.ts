@@ -356,6 +356,7 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		path: extensionPath,
 		resolvedPath,
 		sourceInfo: createSyntheticSourceInfo(extensionPath, { source, baseDir }),
+		placement: "legacy",
 		handlers: new Map(),
 		tools: new Map(),
 		messageRenderers: new Map(),

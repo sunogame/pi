@@ -41,6 +41,7 @@ import type {
 } from "@earendil-works/pi-tui";
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../agent-runtime-snapshot.ts";
 import type { BashResult } from "../bash-executor.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
 import type { EventBus } from "../event-bus.ts";
@@ -49,6 +50,7 @@ import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
 import type { KeybindingsManager } from "../keybindings.ts";
 import type { CustomMessage } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
+import type { RuntimeClient } from "../runtime-client.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -80,6 +82,16 @@ export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions } from "../system-prompt.ts";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
+
+// ============================================================================
+// Extension Placement
+// ============================================================================
+
+export type ExtensionPlacement = "runtime" | "tui" | "both" | "legacy";
+
+export interface ExtensionManifest {
+	placement?: Exclude<ExtensionPlacement, "legacy">;
+}
 
 // ============================================================================
 // UI Context
@@ -116,6 +128,13 @@ export interface WorkingIndicatorOptions {
 /** Wrap the current autocomplete provider with additional behavior. */
 export type AutocompleteProviderFactory = (current: AutocompleteProvider) => AutocompleteProvider;
 export type EditorFactory = (tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => EditorComponent;
+export type ExtensionWidgetFactory = (tui: TUI, theme: Theme) => Component & { dispose?(): void };
+export type ExtensionFooterFactory = (
+	tui: TUI,
+	theme: Theme,
+	footerData: ReadonlyFooterDataProvider,
+) => Component & { dispose?(): void };
+export type ExtensionHeaderFactory = (tui: TUI, theme: Theme) => Component & { dispose?(): void };
 
 /**
  * UI context for extensions to request interactive UI.
@@ -161,11 +180,7 @@ export interface ExtensionUIContext {
 
 	/** Set a widget to display above or below the editor. Accepts string array or component factory. */
 	setWidget(key: string, content: string[] | undefined, options?: ExtensionWidgetOptions): void;
-	setWidget(
-		key: string,
-		content: ((tui: TUI, theme: Theme) => Component & { dispose?(): void }) | undefined,
-		options?: ExtensionWidgetOptions,
-	): void;
+	setWidget(key: string, content: ExtensionWidgetFactory | undefined, options?: ExtensionWidgetOptions): void;
 
 	/** Set a custom footer component, or undefined to restore the built-in footer.
 	 *
@@ -173,14 +188,10 @@ export interface ExtensionUIContext {
 	 * git branch and extension statuses from setStatus(). Token stats, model info,
 	 * etc. are available via ctx.sessionManager and ctx.model.
 	 */
-	setFooter(
-		factory:
-			| ((tui: TUI, theme: Theme, footerData: ReadonlyFooterDataProvider) => Component & { dispose?(): void })
-			| undefined,
-	): void;
+	setFooter(factory: ExtensionFooterFactory | undefined): void;
 
 	/** Set a custom header component (shown at startup, above chat), or undefined to restore the built-in header. */
-	setHeader(factory: ((tui: TUI, theme: Theme) => Component & { dispose?(): void }) | undefined): void;
+	setHeader(factory: ExtensionHeaderFactory | undefined): void;
 
 	/** Set the terminal window/tab title. */
 	setTitle(title: string): void;
@@ -379,6 +390,72 @@ export interface ReplacedSessionContext extends ExtensionCommandContext {
 		options?: { deliverAs?: "steer" | "followUp" },
 	): Promise<void>;
 }
+
+export interface RuntimeExtensionUI {
+	notify(message: string, type?: "info" | "warning" | "error"): void;
+	setStatus(key: string, text: string | undefined): void;
+}
+
+/**
+ * Context for runtime-placed extension handlers.
+ *
+ * Runtime handlers run in the agent runtime and may use runtime internals.
+ * They do not receive TUI component factories or raw terminal input APIs.
+ */
+export interface RuntimeExtensionContext {
+	ui: RuntimeExtensionUI;
+	cwd: string;
+	sessionManager: ReadonlySessionManager;
+	modelRegistry: ModelRegistry;
+	model: Model<any> | undefined;
+	isIdle(): boolean;
+	signal: AbortSignal | undefined;
+	abort(): void;
+	hasPendingMessages(): boolean;
+	shutdown(): void;
+	getContextUsage(): ContextUsage | undefined;
+	compact(options?: CompactOptions): void;
+	getSystemPrompt(): string;
+}
+
+/**
+ * Command context for runtime-placed command handlers.
+ */
+export interface RuntimeExtensionCommandContext extends RuntimeExtensionContext {
+	waitForIdle(): Promise<void>;
+	newSession(options?: {
+		parentSession?: string;
+		setup?: (sessionManager: SessionManager) => Promise<void>;
+		withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
+	}): Promise<{ cancelled: boolean }>;
+	fork(
+		entryId: string,
+		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
+	): Promise<{ cancelled: boolean }>;
+	navigateTree(
+		targetId: string,
+		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
+	): Promise<{ cancelled: boolean }>;
+	switchSession(
+		sessionPath: string,
+		options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
+	): Promise<{ cancelled: boolean }>;
+	reload(): Promise<void>;
+}
+
+/**
+ * Context for TUI-placed extension handlers.
+ *
+ * TUI handlers run in the interactive client. They mutate runtime state only
+ * through RuntimeClient and consume projected runtime state.
+ */
+export interface TuiExtensionContext {
+	ui: ExtensionUIContext;
+	runtime: RuntimeClient;
+	snapshot: AgentRuntimeSnapshot;
+}
+
+export type TuiExtensionCommandContext = TuiExtensionContext;
 
 // ============================================================================
 // Tool Types
@@ -1070,6 +1147,14 @@ export interface ResolvedCommand extends RegisteredCommand {
 	invocationName: string;
 }
 
+export interface RuntimeRegisteredCommand extends Omit<RegisteredCommand, "handler"> {
+	handler: (args: string, ctx: RuntimeExtensionCommandContext) => Promise<void>;
+}
+
+export interface TuiRegisteredCommand extends Omit<RegisteredCommand, "handler"> {
+	handler: (args: string, ctx: TuiExtensionCommandContext) => Promise<void>;
+}
+
 // ============================================================================
 // Extension API
 // ============================================================================
@@ -1080,6 +1165,9 @@ export type ExtensionHandler<E, R = undefined> = (event: E, ctx: ExtensionContex
 
 /**
  * ExtensionAPI passed to extension factory functions.
+ *
+ * @deprecated Use RuntimeExtensionAPI, TuiExtensionAPI, or SplitExtensionAPI
+ * for new extensions.
  */
 export interface ExtensionAPI {
 	// =========================================================================
@@ -1310,6 +1398,103 @@ export interface ExtensionAPI {
 	events: EventBus;
 }
 
+export type RuntimeExtensionHandler<E, R = undefined> = (
+	event: E,
+	ctx: RuntimeExtensionContext,
+) => Promise<R | undefined> | R | undefined;
+
+export type TuiExtensionHandler<E, R = undefined> = (
+	event: E,
+	ctx: TuiExtensionContext,
+) => Promise<R | undefined> | R | undefined;
+
+export interface RuntimeExtensionAPI
+	extends Omit<ExtensionAPI, "on" | "registerCommand" | "registerShortcut" | "registerMessageRenderer"> {
+	on(
+		event: "resources_discover",
+		handler: RuntimeExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>,
+	): void;
+	on(event: "session_start", handler: RuntimeExtensionHandler<SessionStartEvent>): void;
+	on(
+		event: "session_before_switch",
+		handler: RuntimeExtensionHandler<SessionBeforeSwitchEvent, SessionBeforeSwitchResult>,
+	): void;
+	on(
+		event: "session_before_fork",
+		handler: RuntimeExtensionHandler<SessionBeforeForkEvent, SessionBeforeForkResult>,
+	): void;
+	on(
+		event: "session_before_compact",
+		handler: RuntimeExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
+	): void;
+	on(event: "session_compact", handler: RuntimeExtensionHandler<SessionCompactEvent>): void;
+	on(event: "session_shutdown", handler: RuntimeExtensionHandler<SessionShutdownEvent>): void;
+	on(
+		event: "session_before_tree",
+		handler: RuntimeExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>,
+	): void;
+	on(event: "session_tree", handler: RuntimeExtensionHandler<SessionTreeEvent>): void;
+	on(event: "context", handler: RuntimeExtensionHandler<ContextEvent, ContextEventResult>): void;
+	on(
+		event: "before_provider_request",
+		handler: RuntimeExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>,
+	): void;
+	on(event: "after_provider_response", handler: RuntimeExtensionHandler<AfterProviderResponseEvent>): void;
+	on(
+		event: "before_agent_start",
+		handler: RuntimeExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>,
+	): void;
+	on(event: "agent_start", handler: RuntimeExtensionHandler<AgentStartEvent>): void;
+	on(event: "agent_end", handler: RuntimeExtensionHandler<AgentEndEvent>): void;
+	on(event: "turn_start", handler: RuntimeExtensionHandler<TurnStartEvent>): void;
+	on(event: "turn_end", handler: RuntimeExtensionHandler<TurnEndEvent>): void;
+	on(event: "message_start", handler: RuntimeExtensionHandler<MessageStartEvent>): void;
+	on(event: "message_update", handler: RuntimeExtensionHandler<MessageUpdateEvent>): void;
+	on(event: "message_end", handler: RuntimeExtensionHandler<MessageEndEvent, MessageEndEventResult>): void;
+	on(event: "tool_execution_start", handler: RuntimeExtensionHandler<ToolExecutionStartEvent>): void;
+	on(event: "tool_execution_update", handler: RuntimeExtensionHandler<ToolExecutionUpdateEvent>): void;
+	on(event: "tool_execution_end", handler: RuntimeExtensionHandler<ToolExecutionEndEvent>): void;
+	on(event: "model_select", handler: RuntimeExtensionHandler<ModelSelectEvent>): void;
+	on(event: "thinking_level_select", handler: RuntimeExtensionHandler<ThinkingLevelSelectEvent>): void;
+	on(event: "tool_call", handler: RuntimeExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
+	on(event: "tool_result", handler: RuntimeExtensionHandler<ToolResultEvent, ToolResultEventResult>): void;
+	on(event: "user_bash", handler: RuntimeExtensionHandler<UserBashEvent, UserBashEventResult>): void;
+
+	registerCommand(name: string, options: Omit<RuntimeRegisteredCommand, "name" | "sourceInfo">): void;
+	emitExtensionEvent(namespace: string, payload: unknown): void;
+}
+
+export interface TuiExtensionAPI {
+	on(
+		event: "extension_event",
+		handler: TuiExtensionHandler<Extract<AgentRuntimeEvent, { type: "extension_event" }>>,
+	): void;
+	on(event: "runtime_event", handler: TuiExtensionHandler<AgentRuntimeEvent>): void;
+	on(event: "input", handler: TuiExtensionHandler<InputEvent, InputEventResult>): void;
+
+	registerCommand(name: string, options: Omit<TuiRegisteredCommand, "name" | "sourceInfo">): void;
+	registerShortcut(
+		shortcut: KeyId,
+		options: {
+			description?: string;
+			handler: (ctx: TuiExtensionContext) => Promise<void> | void;
+		},
+	): void;
+
+	setWidget(key: string, content: string[] | undefined, options?: ExtensionWidgetOptions): void;
+	setWidget(key: string, content: ExtensionWidgetFactory | undefined, options?: ExtensionWidgetOptions): void;
+	setFooter(factory: ExtensionFooterFactory | undefined): void;
+	setHeader(factory: ExtensionHeaderFactory | undefined): void;
+	registerMessageRenderer<T = unknown>(customType: string, renderer: MessageRenderer<T>): void;
+	addAutocompleteProvider(factory: AutocompleteProviderFactory): void;
+	setEditorFactory(factory: EditorFactory | undefined): void;
+}
+
+export interface SplitExtensionAPI {
+	runtime: RuntimeExtensionAPI;
+	tui: TuiExtensionAPI;
+}
+
 // ============================================================================
 // Provider Registration Types
 // ============================================================================
@@ -1375,8 +1560,22 @@ export interface ProviderModelConfig {
 	compat?: Model<Api>["compat"];
 }
 
-/** Extension factory function type. Supports both sync and async initialization. */
+/**
+ * Extension factory function type. Supports both sync and async initialization.
+ *
+ * @deprecated Use RuntimeExtensionFactory, TuiExtensionFactory, or
+ * SplitExtensionFactory for new extensions.
+ */
 export type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
+
+export type RuntimeExtensionFactory = (pi: RuntimeExtensionAPI) => void | Promise<void>;
+
+export type TuiExtensionFactory = (pi: TuiExtensionAPI) => void | Promise<void>;
+
+export interface SplitExtensionFactory {
+	runtime?: RuntimeExtensionFactory;
+	tui?: TuiExtensionFactory;
+}
 
 // ============================================================================
 // Loaded Extension Types
@@ -1539,6 +1738,8 @@ export interface Extension {
 	path: string;
 	resolvedPath: string;
 	sourceInfo: SourceInfo;
+	/** Missing means legacy placement until the 2c loader migration classifies it. */
+	placement?: ExtensionPlacement;
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;
 	messageRenderers: Map<string, MessageRenderer>;
