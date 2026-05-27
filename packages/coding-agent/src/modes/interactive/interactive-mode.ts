@@ -2668,6 +2668,11 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (await this.tryExecuteRuntimeExtensionCommand(text)) {
+				this.editor.addToHistory?.(text);
+				this.editor.setText("");
+				return;
+			}
 
 			// Handle bash command (! for normal, !! for excluded from context)
 			if (text.startsWith("!")) {
@@ -3920,6 +3925,27 @@ export class InteractiveMode {
 
 		try {
 			await command.handler(args, this.createTuiExtensionContext());
+		} catch (error) {
+			this.showExtensionError(
+				command.sourceInfo.path,
+				error instanceof Error ? error.message : String(error),
+				error instanceof Error ? error.stack : undefined,
+			);
+		}
+		return true;
+	}
+
+	private async tryExecuteRuntimeExtensionCommand(text: string): Promise<boolean> {
+		if (!text.startsWith("/")) return false;
+
+		const spaceIndex = text.indexOf(" ");
+		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
+		const command = this.runtimeSnapshot.commands.find((candidate) => candidate.invocationName === commandName);
+		if (!command) return false;
+
+		try {
+			return await this.runtimeClient.executeCommand(commandName, args);
 		} catch (error) {
 			this.showExtensionError(
 				command.sourceInfo.path,
