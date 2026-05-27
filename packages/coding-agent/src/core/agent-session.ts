@@ -1129,6 +1129,13 @@ export class AgentSession {
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
 
+		return this.executeExtensionCommand(commandName, args);
+	}
+
+	/**
+	 * Execute a runtime extension command by invocation name.
+	 */
+	async executeExtensionCommand(commandName: string, args: string): Promise<boolean> {
 		const command = this._extensionRunner.getCommand(commandName);
 		if (!command) return false;
 

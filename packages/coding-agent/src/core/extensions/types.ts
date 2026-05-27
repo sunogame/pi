@@ -1414,6 +1414,8 @@ export type TuiExtensionHandler<E, R = undefined> = (
 
 export interface RuntimeExtensionAPI
 	extends Omit<ExtensionAPI, "on" | "registerCommand" | "registerShortcut" | "registerMessageRenderer"> {
+	readonly runtime: RuntimeExtensionAPI;
+
 	on(
 		event: "resources_discover",
 		handler: RuntimeExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>,
@@ -1469,6 +1471,8 @@ export interface RuntimeExtensionAPI
 }
 
 export interface TuiExtensionAPI {
+	readonly tui: TuiExtensionAPI;
+
 	on(
 		event: "extension_event",
 		handler: TuiExtensionHandler<Extract<AgentRuntimeEvent, { type: "extension_event" }>>,

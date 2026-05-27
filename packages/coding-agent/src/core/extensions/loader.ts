@@ -349,7 +349,9 @@ function createExtensionAPI(
 		},
 
 		events: eventBus,
-	} as ExtensionAPI;
+	} as ExtensionAPI & { runtime?: RuntimeExtensionAPI };
+
+	api.runtime = api as unknown as RuntimeExtensionAPI;
 
 	return api;
 }
@@ -405,7 +407,9 @@ function createTuiExtensionAPI(extension: Extension): TuiExtensionAPI {
 		setEditorFactory(factory): void {
 			extension.tuiEditorFactory = factory;
 		},
-	} as TuiExtensionAPI;
+	} as TuiExtensionAPI & { tui?: TuiExtensionAPI };
+
+	api.tui = api;
 
 	return api;
 }

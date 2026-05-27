@@ -498,7 +498,7 @@ describe("extensions discovery", () => {
 			`
 				export const placement = "runtime";
 				export default function(pi) {
-					pi.registerCommand("runtime-command", { handler: async () => {} });
+					pi.runtime.registerCommand("runtime-command", { handler: async () => {} });
 				}
 			`,
 		);
@@ -507,7 +507,7 @@ describe("extensions discovery", () => {
 			`
 				export const placement = "tui";
 				export function tui(pi) {
-					pi.registerCommand("tui-command", { handler: async () => {} });
+					pi.tui.registerCommand("tui-command", { handler: async () => {} });
 					pi.registerShortcut("ctrl+u", { handler: async () => {} });
 					pi.registerMessageRenderer("tui-message", () => undefined);
 					pi.setWidget("tui-widget", ["hello"]);

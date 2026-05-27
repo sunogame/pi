@@ -87,6 +87,7 @@ export interface RuntimeClient {
 	navigateTree(targetId: string, options?: RuntimeNavigateTreeOptions): Promise<RuntimeNavigateTreeResult>;
 	getToolDefinition(name: string): Promise<ToolDefinition | undefined>;
 	setLabel(entryId: string, label: string | undefined): Promise<void>;
+	executeCommand(name: string, args: string): Promise<boolean>;
 }
 
 export type AgentRuntimeStoreListener = (snapshot: AgentRuntimeSnapshot, event?: AgentRuntimeEvent) => void;
@@ -432,6 +433,12 @@ export class InProcessRuntimeClient implements RuntimeClient {
 	async setLabel(entryId: string, label: string | undefined): Promise<void> {
 		this.runtime.session.sessionManager.appendLabelChange(entryId, label);
 		this.refreshFromRuntime();
+	}
+
+	async executeCommand(name: string, args: string): Promise<boolean> {
+		const handled = await this.runtime.session.executeExtensionCommand(name, args);
+		this.refreshFromRuntime();
+		return handled;
 	}
 
 	private refreshFromRuntime(): void {

@@ -3,6 +3,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "./agent-session.ts";
 import type { ToolInfo } from "./extensions/index.ts";
 import type { SessionEntry } from "./session-manager.ts";
+import type { SourceInfo } from "./source-info.ts";
 
 export type AgentRuntimeStatus = "idle" | "running" | "retrying" | "waiting_input" | "compacting" | "error";
 
@@ -118,6 +119,15 @@ export interface RuntimeConfigSnapshot {
 	scopedModels: Array<{ model: AgentRuntimeModelSnapshot; thinkingLevel?: ThinkingLevel }>;
 }
 
+export interface RuntimeCommandSnapshot {
+	name: string;
+	invocationName: string;
+	description?: string;
+	source: "runtime";
+	placement: "runtime";
+	sourceInfo: SourceInfo;
+}
+
 export interface AgentRuntimeSnapshot {
 	protocolVersion: 1;
 	capabilities: AgentRuntimeCapability[];
@@ -131,6 +141,7 @@ export interface AgentRuntimeSnapshot {
 	modelRegistry: RuntimeModelRegistrySnapshot;
 	diagnostics: RuntimeDiagnosticSnapshot;
 	config: RuntimeConfigSnapshot;
+	commands: RuntimeCommandSnapshot[];
 }
 
 export type AgentRuntimeEvent =
@@ -302,6 +313,17 @@ function configSnapshot(session: AgentSession): RuntimeConfigSnapshot {
 	};
 }
 
+function commandsSnapshot(session: AgentSession): RuntimeCommandSnapshot[] {
+	return session.extensionRunner.getRegisteredCommands().map((command) => ({
+		name: command.name,
+		invocationName: command.invocationName,
+		description: command.description,
+		source: "runtime",
+		placement: "runtime",
+		sourceInfo: command.sourceInfo,
+	}));
+}
+
 export class AgentRuntimeSnapshotProjector {
 	private readonly identity: AgentRuntimeIdentity;
 	private readonly maxEventLogEntries: number;
@@ -426,6 +448,7 @@ export class AgentRuntimeSnapshotProjector {
 			modelRegistry: modelRegistrySnapshot(session),
 			diagnostics: diagnosticsSnapshot(session),
 			config: configSnapshot(session),
+			commands: commandsSnapshot(session),
 		};
 	}
 
