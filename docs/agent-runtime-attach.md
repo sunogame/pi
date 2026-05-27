@@ -357,6 +357,19 @@ executions. Any entry point that still requires local-only protocol gaps must
 be hidden, disabled, or explicitly marked unsupported rather than reaching
 into `AgentSession`.
 
+The Phase 4 attach TUI supports only IPC-safe capabilities:
+
+- `prompt` / `abort` for the main run loop;
+- `runtime_commands` for slash commands advertised in `snapshot.commands`;
+- `event_replay` for attach/reconnect state repair;
+- `extension_events` as the split-extension communication channel.
+
+The following full interactive features remain disabled in attach mode until
+their protocol capabilities exist: model/auth pickers, raw bash UI callbacks,
+legacy extension shortcuts and message renderers, direct tool definition
+inspection, session tree navigation, fork/import/resume flows, and
+process-local transport/model mutation.
+
 Phase 4 does not include multi-agent discovery or attach switching. Those are
 Phase 5 supervisor responsibilities.
 

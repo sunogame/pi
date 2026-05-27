@@ -10,15 +10,15 @@ The baseline CLI implementation has two process roles:
 
 - `--mode runtime-ipc` starts a runtime process that speaks this JSONL
   protocol on stdio.
-- `--mode attach-ipc` starts a minimal TUI client process, spawns a child
+- `--mode attach-ipc` starts an IPC-backed TUI client process, spawns a child
   `--mode runtime-ipc` process with the same runtime flags, attaches through an
-  `IpcRuntimeClient`, and renders transcript/status while sending prompts and
-  aborts over IPC.
+  `IpcRuntimeClient`, renders the normal pi transcript/editor/footer
+  components where protocol data is available, and sends prompts, aborts, and
+  runtime commands over IPC.
 
-`--mode attach-ipc` is intentionally smaller than the historical in-process
-`InteractiveMode`: model/auth pickers, legacy extension UI, and local-only
-callbacks stay out of the Phase 3 baseline until they have explicit
-serializable APIs.
+`--mode attach-ipc` is intentionally capability-gated: model/auth pickers,
+legacy extension UI, and local-only callbacks stay out of the IPC path until
+they have explicit serializable APIs.
 
 ## Transport
 
