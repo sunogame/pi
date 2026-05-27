@@ -42,6 +42,7 @@ import type {
 	RegisteredTool,
 	ReplacedSessionContext,
 	ResolvedCommand,
+	ResolvedTuiCommand,
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
 	SessionBeforeCompactResult,
@@ -53,6 +54,8 @@ import type {
 	ToolCallEventResult,
 	ToolResultEvent,
 	ToolResultEventResult,
+	TuiExtensionContext,
+	TuiExtensionShortcut,
 	UserBashEvent,
 	UserBashEventResult,
 } from "./types.ts";
@@ -220,6 +223,126 @@ const noOpUIContext: ExtensionUIContext = {
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
 };
+
+export class TuiExtensionRunner {
+	private readonly extensions: Extension[];
+	private shortcutDiagnostics: ResourceDiagnostic[] = [];
+	private commandDiagnostics: ResourceDiagnostic[] = [];
+
+	constructor(extensions: Extension[]) {
+		this.extensions = extensions;
+	}
+
+	getShortcuts(resolvedKeybindings: KeybindingsConfig): Map<KeyId, TuiExtensionShortcut> {
+		this.shortcutDiagnostics = [];
+		const builtinKeybindings = buildBuiltinKeybindings(resolvedKeybindings);
+		const extensionShortcuts = new Map<KeyId, TuiExtensionShortcut>();
+
+		const addDiagnostic = (message: string, extensionPath: string) => {
+			this.shortcutDiagnostics.push({ type: "warning", message, path: extensionPath });
+		};
+
+		for (const ext of this.extensions) {
+			for (const [key, shortcut] of ext.tuiShortcuts ?? []) {
+				const normalizedKey = key.toLowerCase() as KeyId;
+
+				const builtInKeybinding = builtinKeybindings[normalizedKey];
+				if (builtInKeybinding?.restrictOverride === true) {
+					addDiagnostic(
+						`TUI extension shortcut '${key}' from ${shortcut.extensionPath} conflicts with built-in shortcut. Skipping.`,
+						shortcut.extensionPath,
+					);
+					continue;
+				}
+
+				if (builtInKeybinding?.restrictOverride === false) {
+					addDiagnostic(
+						`TUI extension shortcut conflict: '${key}' is built-in shortcut for ${builtInKeybinding.keybinding} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,
+						shortcut.extensionPath,
+					);
+				}
+
+				const existingExtensionShortcut = extensionShortcuts.get(normalizedKey);
+				if (existingExtensionShortcut) {
+					addDiagnostic(
+						`TUI extension shortcut conflict: '${key}' registered by both ${existingExtensionShortcut.extensionPath} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,
+						shortcut.extensionPath,
+					);
+				}
+				extensionShortcuts.set(normalizedKey, shortcut);
+			}
+		}
+		return extensionShortcuts;
+	}
+
+	getShortcutDiagnostics(): ResourceDiagnostic[] {
+		return this.shortcutDiagnostics;
+	}
+
+	getMessageRenderer(customType: string): MessageRenderer | undefined {
+		for (const ext of this.extensions) {
+			const renderer = ext.tuiMessageRenderers?.get(customType);
+			if (renderer) {
+				return renderer;
+			}
+		}
+		return undefined;
+	}
+
+	private resolveRegisteredCommands(): ResolvedTuiCommand[] {
+		const commands = this.extensions.flatMap((ext) => [...(ext.tuiCommands?.values() ?? [])]);
+		const counts = new Map<string, number>();
+		for (const command of commands) {
+			counts.set(command.name, (counts.get(command.name) ?? 0) + 1);
+		}
+
+		const seen = new Map<string, number>();
+		const takenInvocationNames = new Set<string>();
+
+		return commands.map((command) => {
+			const occurrence = (seen.get(command.name) ?? 0) + 1;
+			seen.set(command.name, occurrence);
+
+			let invocationName = (counts.get(command.name) ?? 0) > 1 ? `${command.name}:${occurrence}` : command.name;
+
+			if (takenInvocationNames.has(invocationName)) {
+				let suffix = occurrence;
+				do {
+					suffix++;
+					invocationName = `${command.name}:${suffix}`;
+				} while (takenInvocationNames.has(invocationName));
+			}
+
+			takenInvocationNames.add(invocationName);
+			return {
+				...command,
+				invocationName,
+			};
+		});
+	}
+
+	getRegisteredCommands(): ResolvedTuiCommand[] {
+		this.commandDiagnostics = [];
+		return this.resolveRegisteredCommands();
+	}
+
+	getCommandDiagnostics(): ResourceDiagnostic[] {
+		return this.commandDiagnostics;
+	}
+
+	getCommand(name: string): ResolvedTuiCommand | undefined {
+		return this.resolveRegisteredCommands().find((command) => command.invocationName === name);
+	}
+
+	async executeCommand(name: string, args: string, ctx: TuiExtensionContext): Promise<boolean> {
+		const command = this.getCommand(name);
+		if (!command) {
+			return false;
+		}
+		await command.handler(args, ctx);
+		return true;
+	}
+}
 
 export class ExtensionRunner {
 	private extensions: Extension[];

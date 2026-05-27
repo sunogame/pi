@@ -1155,6 +1155,10 @@ export interface TuiRegisteredCommand extends Omit<RegisteredCommand, "handler">
 	handler: (args: string, ctx: TuiExtensionCommandContext) => Promise<void>;
 }
 
+export interface ResolvedTuiCommand extends TuiRegisteredCommand {
+	invocationName: string;
+}
+
 // ============================================================================
 // Extension API
 // ============================================================================

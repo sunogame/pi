@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverAndLoadExtensions } from "../src/core/extensions/loader.ts";
+import { TuiExtensionRunner } from "../src/core/extensions/runner.ts";
+import { KeybindingsManager } from "../src/core/keybindings.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -546,6 +548,15 @@ describe("extensions discovery", () => {
 		expect(bothExtension?.commands.has("both-tui-command")).toBe(false);
 		expect(bothExtension?.tuiCommands?.has("both-tui-command")).toBe(true);
 		expect(bothExtension?.tuiMessageRenderers?.has("both-tui-message")).toBe(true);
+		const tuiRunner = new TuiExtensionRunner(result.tuiExtensions ?? []);
+		expect(
+			tuiRunner
+				.getRegisteredCommands()
+				.map((command) => command.name)
+				.sort(),
+		).toEqual(["both-tui-command", "tui-command"]);
+		expect(tuiRunner.getShortcuts(new KeybindingsManager().getEffectiveConfig()).has("ctrl+u")).toBe(true);
+		expect(tuiRunner.getMessageRenderer("tui-message")).toBeDefined();
 		expect(result.extensions.some((extension) => extension.placement === "tui")).toBe(false);
 	});
 });

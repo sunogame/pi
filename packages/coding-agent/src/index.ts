@@ -134,6 +134,7 @@ export type {
 	RegisteredCommand,
 	RegisteredTool,
 	ResolvedCommand,
+	ResolvedTuiCommand,
 	RuntimeExtensionAPI,
 	RuntimeExtensionCommandContext,
 	RuntimeExtensionContext,
@@ -189,6 +190,7 @@ export {
 	isReadToolResult,
 	isToolCallEventType,
 	isWriteToolResult,
+	TuiExtensionRunner,
 	wrapRegisteredTool,
 	wrapRegisteredTools,
 } from "./core/extensions/index.ts";

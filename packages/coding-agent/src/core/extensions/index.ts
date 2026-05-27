@@ -18,7 +18,7 @@ export type {
 	ShutdownHandler,
 	SwitchSessionHandler,
 } from "./runner.ts";
-export { ExtensionRunner } from "./runner.ts";
+export { ExtensionRunner, TuiExtensionRunner } from "./runner.ts";
 export type {
 	AfterProviderResponseEvent,
 	AgentEndEvent,
@@ -112,6 +112,7 @@ export type {
 	RegisteredTool,
 	ReplacedSessionContext,
 	ResolvedCommand,
+	ResolvedTuiCommand,
 	// Events - Resources
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
