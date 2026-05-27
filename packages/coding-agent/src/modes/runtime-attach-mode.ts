@@ -1,5 +1,13 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { Container, ProcessTerminal, setKeybindings, Text, TUI } from "@earendil-works/pi-tui";
+import {
+	CombinedAutocompleteProvider,
+	Container,
+	ProcessTerminal,
+	type SlashCommand,
+	setKeybindings,
+	Text,
+	TUI,
+} from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../core/agent-runtime-snapshot.ts";
 import { FooterDataProvider } from "../core/footer-data-provider.ts";
@@ -81,6 +89,7 @@ class RuntimeAttachView {
 			onPopulateHistory: (text) => this.editor.addToHistory(text),
 		});
 		this.editor = new CustomEditor(tui, getEditorTheme(), this.keybindings, { paddingX: 1 });
+		this.setupAutocompleteProvider(client.store.snapshot);
 		this.editor.onSubmit = (text) => {
 			void this.submit(text);
 		};
@@ -239,8 +248,21 @@ class RuntimeAttachView {
 		this.tui.requestRender();
 	}
 
+	private setupAutocompleteProvider(snapshot: AgentRuntimeSnapshot): void {
+		const commands: SlashCommand[] = snapshot.commands
+			.filter((command) => command.placement === "runtime")
+			.map((command) => ({
+				name: command.invocationName,
+				description: command.description,
+			}));
+		this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, snapshot.agent.cwd));
+	}
+
 	private handleRuntimeEvent(event: AgentRuntimeEvent, snapshot: AgentRuntimeSnapshot): void {
 		switch (event.type) {
+			case "commands_changed":
+				this.setupAutocompleteProvider(snapshot);
+				break;
 			case "message_start":
 				this.transcript.handleMessageStart(event.message);
 				break;
