@@ -1,19 +1,13 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import {
-	Container,
-	Editor,
-	type EditorTheme,
-	ProcessTerminal,
-	type SelectListTheme,
-	Text,
-	TUI,
-} from "@earendil-works/pi-tui";
+import { Container, ProcessTerminal, setKeybindings, Text, TUI } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../core/agent-runtime-snapshot.ts";
 import { createIpcRuntimeClient, type IpcRuntimeClient } from "../core/ipc-runtime-client.ts";
+import { KeybindingsManager } from "../core/keybindings.ts";
 import { createStreamRuntimeTransport } from "../core/runtime-transport.ts";
+import { CustomEditor } from "./interactive/components/custom-editor.ts";
 import { RuntimeTranscriptView } from "./interactive/runtime-transcript-view.ts";
-import { initTheme } from "./interactive/theme/theme.ts";
+import { getEditorTheme, initTheme } from "./interactive/theme/theme.ts";
 
 export function toRuntimeIpcArgs(args: readonly string[]): string[] {
 	const next = [...args];
@@ -61,7 +55,8 @@ class RuntimeAttachView {
 	private readonly status = new Text("", 1, 0);
 	private readonly transcript: RuntimeTranscriptView;
 	private readonly help = new Text("", 1, 0);
-	private readonly editor: Editor;
+	private readonly editor: CustomEditor;
+	private readonly keybindings: KeybindingsManager;
 	private stopped = false;
 	private lastError: string | undefined;
 	private childStderr = "";
@@ -72,15 +67,28 @@ class RuntimeAttachView {
 		this.tui = tui;
 		this.client = client;
 		this.child = child;
+		this.keybindings = KeybindingsManager.create();
+		setKeybindings(this.keybindings);
 		this.transcript = new RuntimeTranscriptView({
 			tui,
 			cwd: client.store.snapshot.agent.cwd,
 			onPopulateHistory: (text) => this.editor.addToHistory(text),
 		});
-		this.editor = new Editor(tui, createEditorTheme(), { paddingX: 1 });
+		this.editor = new CustomEditor(tui, getEditorTheme(), this.keybindings, { paddingX: 1 });
 		this.editor.onSubmit = (text) => {
 			void this.submit(text);
 		};
+		this.editor.onEscape = () => {
+			void this.client.abort().catch((error: unknown) => {
+				this.setError(error);
+			});
+		};
+		this.editor.onCtrlD = () => {
+			this.finish?.();
+		};
+		this.editor.onAction("app.clear", () => {
+			this.editor.setText("");
+		});
 
 		this.root.addChild(this.status);
 		this.root.addChild(this.transcript);
@@ -125,12 +133,6 @@ class RuntimeAttachView {
 			this.tui.addInputListener((data) => {
 				if (data === "\x03" || data === "\x04") {
 					finish();
-					return { consume: true };
-				}
-				if (data === "\x1b") {
-					void this.client.abort().catch((error: unknown) => {
-						this.setError(error);
-					});
 					return { consume: true };
 				}
 				return undefined;
@@ -256,20 +258,6 @@ function formatStatus(snapshot: AgentRuntimeSnapshot): string {
 		suffixes.push(`${tools} tool${tools === 1 ? "" : "s"}`);
 	}
 	return suffixes.length > 0 ? `${status} (${suffixes.join(", ")})` : status;
-}
-
-function createEditorTheme(): EditorTheme {
-	const selectList: SelectListTheme = {
-		selectedPrefix: (text) => chalk.cyan(text),
-		selectedText: (text) => chalk.inverse(text),
-		description: (text) => chalk.dim(text),
-		scrollInfo: (text) => chalk.dim(text),
-		noMatch: (text) => chalk.dim(text),
-	};
-	return {
-		borderColor: (text) => chalk.dim(text),
-		selectList,
-	};
 }
 
 function createPlaceholderSnapshot(cwd: string): AgentRuntimeSnapshot {
