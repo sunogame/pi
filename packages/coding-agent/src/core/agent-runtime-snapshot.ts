@@ -149,6 +149,7 @@ export type AgentRuntimeEvent =
 	| { id: number; type: "extension_event"; namespace: string; payload: unknown }
 	| { id: number; type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
 	| { id: number; type: "compaction_end"; reason: "manual" | "threshold" | "overflow"; aborted: boolean }
+	| { id: number; type: "transcript_changed"; reason: "compaction" | "fork" | "import" }
 	| { id: number; type: "error"; message: string };
 
 export type AgentRuntimeEventListener = (event: AgentRuntimeEvent) => void;
@@ -301,7 +302,7 @@ export class AgentRuntimeSnapshotProjector {
 			agentId: options.identity?.agentId ?? session.sessionId,
 			agentLabel: options.identity?.agentLabel,
 		};
-		this.maxEventLogEntries = options.eventLogLimit ?? 10000;
+		this.maxEventLogEntries = options.eventLogLimit ?? 2000;
 		this.capabilities = options.capabilities ?? ["event_replay", "extension_events"];
 		this.status = statusFromSession(session);
 		this.subscribeToSession(session);
@@ -489,6 +490,9 @@ export class AgentRuntimeSnapshotProjector {
 				break;
 			case "compaction_end":
 				this.emit({ type: "compaction_end", reason: event.reason, aborted: event.aborted });
+				if (!event.aborted) {
+					this.emit({ type: "transcript_changed", reason: "compaction" });
+				}
 				this.emitStatusIfChanged(statusFromSession(this.session));
 				break;
 			case "session_info_changed":

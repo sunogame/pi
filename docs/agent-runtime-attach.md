@@ -76,6 +76,16 @@ client must request a fresh snapshot.
 
 ## Snapshot
 
+The snapshot is the authoritative representation of runtime state at the
+moment it was taken. It reflects all durable state from `session.jsonl` plus
+current run-time state such as the streaming assistant message, active tool
+executions, and queued user messages. A client can always rebuild its full
+local view from a fresh snapshot, regardless of event buffer availability.
+
+The event stream is an incremental optimization layered on top: events let a
+client maintain its view without re-snapshotting on every change. Events are
+not the source of truth; the snapshot is.
+
 Snapshot data is semantic state, not rendered TUI components.
 
 ```ts
@@ -196,6 +206,7 @@ type AgentRuntimeEvent =
   | { id: number; type: "extension_event"; namespace: string; payload: unknown }
   | { id: number; type: "compaction_start"; reason: string }
   | { id: number; type: "compaction_end"; reason: string; aborted: boolean }
+  | { id: number; type: "transcript_changed"; reason: "compaction" | "fork" | "import" }
   | { id: number; type: "error"; message: string };
 ```
 
@@ -206,6 +217,11 @@ shape without changing the model loop.
 Runtime extension code emits it with a namespace owned by that extension, and
 the TUI half listens for the same namespace. Split extensions should not create
 their own sockets or FIFOs.
+
+`session_changed` means the attached session changed, such as `/new`, `/fork`,
+or importing a different transcript. `transcript_changed` means the same
+session remains attached but the transcript entry sequence changed. The first
+v1 producer is successful compaction.
 
 ## Extension Placement
 
@@ -322,6 +338,44 @@ Stdio and Unix socket implementations should share the same client protocol.
 - Live events delivered after attach have `id > snapshot.eventCursor`.
 - A client must ignore duplicate events with `id <= lastAppliedEventId`.
 
+### Reference Attach Pattern
+
+A correct client implementation must dedupe events that arrive both through
+`initialEvents` and the live listener because both are delivered around the
+attach call:
+
+```ts
+const inbox: AgentRuntimeEvent[] = [];
+const result = await client.attach({
+  lastSeenEventId: lastApplied,
+  listener: (event) => inbox.push(event),
+});
+
+if (!result.initialEventsComplete) {
+  store.replaceFrom(result.snapshot);
+  lastApplied = result.snapshot.eventCursor;
+} else {
+  for (const event of result.initialEvents) {
+    if (event.id > lastApplied) {
+      store.apply(event);
+      lastApplied = event.id;
+    }
+  }
+}
+
+for (const event of inbox) {
+  if (event.id > lastApplied) {
+    store.apply(event);
+    lastApplied = event.id;
+  }
+}
+inbox.length = 0;
+```
+
+The `InProcessRuntimeClient` and `IpcRuntimeClient` shipped with pi should
+encapsulate this pattern. Users implementing alternative clients must follow
+the same dedupe rule.
+
 ## Versioning
 
 - `protocolVersion: 1` identifies the snapshot/event contract.
@@ -333,6 +387,47 @@ Stdio and Unix socket implementations should share the same client protocol.
 - Incompatible semantic changes require a new protocol version.
 - Future capability negotiation should live under a server/runtime capabilities
   object instead of relying on event probing.
+
+### Capabilities
+
+Each capability defines a specific feature beyond the v1 baseline.
+
+#### `event_replay`
+
+The runtime maintains a bounded in-memory ring buffer of recent runtime events.
+Clients may pass `lastSeenEventId` on attach to receive events that occurred
+after that cursor without re-applying the full snapshot.
+
+The buffer size is implementation-defined and bounded. Replay is not required
+for protocol correctness: a fresh snapshot always reflects the full durable
+state. Clients must check `initialEventsComplete` and treat `false` as "buffer
+did not cover my cursor; rebuild from snapshot".
+
+Events are not persisted across runtime restarts. After a runtime restart,
+`lastSeenEventId` values issued by the previous incarnation are invalid;
+clients must attach without `lastSeenEventId` and rebuild from snapshot.
+
+A minimal runtime may omit this capability entirely. In that case clients must
+always attach without `lastSeenEventId` and rebuild from snapshot on every
+reconnect.
+
+#### `extension_events`
+
+The runtime accepts `emitExtensionRuntimeEvent(namespace, payload)` from
+runtime-side extensions and projects them as `extension_event` entries in the
+event stream. This is the only sanctioned channel for split (`both`) extensions
+to communicate between their runtime half and TUI half.
+
+#### `approval` (future)
+
+Reserved for runtime-level tool approval flows. v1 does not implement this;
+`pendingApprovals` is always empty and `approval_*` events never fire.
+
+#### `input_required` (future)
+
+Reserved for runtime-level "needs human input" pauses, such as an agent asking
+a clarifying question and stopping. v1 does not implement this;
+`inputRequired` is always undefined and `input_*` events never fire.
 
 ## TUI Rebuild
 
