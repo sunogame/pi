@@ -2,6 +2,21 @@
 
 // Config paths
 export { getAgentDir, VERSION } from "./config.ts";
+export type {
+	AgentIdentitySnapshot,
+	AgentRuntimeEvent,
+	AgentRuntimeEventListener,
+	AgentRuntimeModelSnapshot,
+	AgentRuntimeSnapshot,
+	AgentRuntimeStatus,
+	PendingUserMessageSnapshot,
+	RunSnapshot,
+	SessionSnapshot,
+	ToolExecutionSnapshot,
+	ToolExecutionStatus,
+	ToolsSnapshot,
+	TranscriptSnapshot,
+} from "./core/agent-runtime-snapshot.ts";
 export {
 	AgentSession,
 	type AgentSessionConfig,

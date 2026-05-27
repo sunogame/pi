@@ -1,6 +1,11 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { resolvePath } from "../utils/paths.ts";
+import {
+	type AgentRuntimeEventListener,
+	type AgentRuntimeSnapshot,
+	AgentRuntimeSnapshotProjector,
+} from "./agent-runtime-snapshot.ts";
 import type { AgentSession } from "./agent-session.ts";
 import type { AgentSessionRuntimeDiagnostic, AgentSessionServices } from "./agent-session-services.ts";
 import type { ReplacedSessionContext, SessionShutdownEvent, SessionStartEvent } from "./extensions/index.ts";
@@ -73,6 +78,7 @@ export class AgentSessionRuntime {
 	private readonly createRuntime: CreateAgentSessionRuntimeFactory;
 	private _diagnostics: AgentSessionRuntimeDiagnostic[];
 	private _modelFallbackMessage?: string;
+	private readonly snapshotProjector: AgentRuntimeSnapshotProjector;
 
 	constructor(
 		_session: AgentSession,
@@ -86,6 +92,7 @@ export class AgentSessionRuntime {
 		this.createRuntime = createRuntime;
 		this._diagnostics = _diagnostics;
 		this._modelFallbackMessage = _modelFallbackMessage;
+		this.snapshotProjector = new AgentRuntimeSnapshotProjector(_session);
 	}
 
 	get services(): AgentSessionServices {
@@ -106,6 +113,14 @@ export class AgentSessionRuntime {
 
 	get modelFallbackMessage(): string | undefined {
 		return this._modelFallbackMessage;
+	}
+
+	getSnapshot(): AgentRuntimeSnapshot {
+		return this.snapshotProjector.getSnapshot();
+	}
+
+	subscribeRuntimeEvents(listener: AgentRuntimeEventListener): () => void {
+		return this.snapshotProjector.subscribe(listener);
 	}
 
 	setRebindSession(rebindSession?: (session: AgentSession) => Promise<void>): void {
@@ -173,6 +188,7 @@ export class AgentSessionRuntime {
 		this._services = result.services;
 		this._diagnostics = result.diagnostics;
 		this._modelFallbackMessage = result.modelFallbackMessage;
+		this.snapshotProjector.replaceSession(result.session);
 	}
 
 	private async finishSessionReplacement(withSession?: (ctx: ReplacedSessionContext) => Promise<void>): Promise<void> {
@@ -380,6 +396,7 @@ export class AgentSessionRuntime {
 			reason: "quit",
 		});
 		this.beforeSessionInvalidate?.();
+		this.snapshotProjector.dispose();
 		this.session.dispose();
 	}
 }
