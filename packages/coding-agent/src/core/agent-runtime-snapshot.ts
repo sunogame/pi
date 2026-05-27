@@ -116,6 +116,7 @@ export interface RuntimeConfigSnapshot {
 	autoCompaction: boolean;
 	steeringMode: "all" | "one-at-a-time";
 	followUpMode: "all" | "one-at-a-time";
+	availableThinkingLevels: ThinkingLevel[];
 	scopedModels: Array<{ model: AgentRuntimeModelSnapshot; thinkingLevel?: ThinkingLevel }>;
 }
 
@@ -306,6 +307,7 @@ function configSnapshot(session: AgentSession): RuntimeConfigSnapshot {
 		autoCompaction: session.autoCompactionEnabled,
 		steeringMode: session.steeringMode,
 		followUpMode: session.followUpMode,
+		availableThinkingLevels: session.getAvailableThinkingLevels(),
 		scopedModels: session.scopedModels.map((scoped) => ({
 			model: modelSnapshot(scoped.model),
 			thinkingLevel: scoped.thinkingLevel,

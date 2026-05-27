@@ -1,6 +1,6 @@
 /**
  * Interactive mode for the coding agent.
- * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
+ * Handles TUI rendering and user interaction, delegating runtime work through RuntimeClient.
  */
 
 import * as crypto from "node:crypto";
@@ -59,7 +59,7 @@ import {
 	VERSION,
 } from "../../config.ts";
 import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../../core/agent-runtime-snapshot.ts";
-import { type AgentSession, parseSkillBlock } from "../../core/agent-session.ts";
+import { parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -350,7 +350,9 @@ export class InteractiveMode {
 	private options: InteractiveModeOptions;
 
 	// Convenience accessors
-	private get session(): AgentSession {
+	private get session() {
+		// TODO(stage2-ipc): remove this compatibility accessor after model/auth,
+		// legacy extension shortcuts, and user_bash hooks move behind RuntimeClient APIs.
 		return this.runtimeHost.session;
 	}
 	private get runtimeSnapshot(): AgentRuntimeSnapshot {
@@ -4082,7 +4084,7 @@ export class InteractiveMode {
 					transport: this.settingsManager.getTransport(),
 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
 					thinkingLevel: this.runtimeSnapshot.agent.thinkingLevel,
-					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
+					availableThinkingLevels: this.runtimeSnapshot.config.availableThinkingLevels,
 					currentTheme: this.settingsManager.getTheme() || "dark",
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,

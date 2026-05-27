@@ -109,6 +109,7 @@ describe("Agent runtime snapshot", () => {
 		expect(snapshot.resources.promptTemplates).toEqual([]);
 		expect(snapshot.config.autoCompaction).toBeTypeOf("boolean");
 		expect(snapshot.config.steeringMode).toBe("one-at-a-time");
+		expect(snapshot.config.availableThinkingLevels).toContain("off");
 	});
 
 	it("projects session events into attach protocol events", async () => {

@@ -266,3 +266,26 @@ Those are later stages.
 - old extension APIs still work in legacy in-process mode with warnings;
 - at least one integration test proves runtime placement, TUI placement, and a
   split `both` extension are routed correctly.
+
+## Stage 2 API Gaps
+
+2c removes typed `AgentSession` ownership from `InteractiveMode`, but a few
+legacy in-process reads remain intentionally behind a compatibility accessor
+until Stage 2 defines stable IPC APIs for them:
+
+- model selection and provider login/logout still need a model/auth protocol
+  that can serialize model references, provider auth status, OAuth flows, and
+  scoped model edits;
+- legacy extension shortcuts, message renderers, and `user_bash` hooks still
+  depend on the old runtime `ExtensionRunner` until built-in and user
+  extensions finish moving to `tui`/`both` placement;
+- footer and some diagnostics still consume runtime-local objects while the
+  footer data provider and resource diagnostics are being moved fully onto
+  snapshot state;
+- tool rendering still asks the in-process runtime for full tool definitions
+  because the current `ToolsSnapshot` intentionally exposes only metadata safe
+  for display.
+
+These are Stage 2 transport/interface tasks, not extension placement tasks.
+They should be removed before `InteractiveMode` runs against a remote
+`IpcRuntimeClient`.
