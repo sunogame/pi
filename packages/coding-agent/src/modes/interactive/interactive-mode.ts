@@ -79,6 +79,7 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
+import { createInProcessRuntimeClient, type RuntimeClient } from "../../core/runtime-client.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { buildSessionContext, type SessionContext, SessionManager } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
@@ -237,6 +238,7 @@ export interface InteractiveModeOptions {
 
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
+	private runtimeClient: RuntimeClient;
 	private ui: TUI;
 	private chatContainer: Container;
 	private pendingMessagesContainer: Container;
@@ -356,9 +358,13 @@ export class InteractiveMode {
 	private get settingsManager() {
 		return this.session.settingsManager;
 	}
+	private get runtimeSnapshot(): AgentRuntimeSnapshot {
+		return this.runtimeClient.store.snapshot;
+	}
 
 	constructor(runtimeHost: AgentSessionRuntime, options: InteractiveModeOptions = {}) {
 		this.runtimeHost = runtimeHost;
+		this.runtimeClient = createInProcessRuntimeClient(runtimeHost);
 		this.options = options;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
 			this.resetExtensionUI();
@@ -386,7 +392,7 @@ export class InteractiveMode {
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
-		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
+		this.footerDataProvider = new FooterDataProvider(this.runtimeSnapshot.agent.cwd);
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 
@@ -518,7 +524,7 @@ export class InteractiveMode {
 
 		return new CombinedAutocompleteProvider(
 			[...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList],
-			this.sessionManager.getCwd(),
+			this.runtimeSnapshot.agent.cwd,
 			this.fdPath,
 		);
 	}
@@ -579,11 +585,14 @@ export class InteractiveMode {
 		const [fdPath] = await Promise.all([ensureTool("fd"), ensureTool("rg")]);
 		this.fdPath = fdPath;
 
-		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {
-			const modelList = this.session.scopedModels
+		if (
+			this.runtimeSnapshot.config.scopedModels.length > 0 &&
+			(this.options.verbose || !this.settingsManager.getQuietStartup())
+		) {
+			const modelList = this.runtimeSnapshot.config.scopedModels
 				.map((sm) => {
 					const thinkingStr = sm.thinkingLevel ? `:${sm.thinkingLevel}` : "";
-					return `${sm.model.id}${thinkingStr}`;
+					return `${sm.model.modelId ?? sm.model.displayName ?? "unknown"}${thinkingStr}`;
 				})
 				.join(", ");
 			const cycleKeys = this.keybindings.getKeys("app.model.cycleForward");
@@ -674,6 +683,7 @@ export class InteractiveMode {
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
 		this.isInitialized = true;
+		await this.runtimeClient.attach();
 
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();
@@ -701,8 +711,8 @@ export class InteractiveMode {
 	 * Update terminal title with session name and cwd.
 	 */
 	private updateTerminalTitle(): void {
-		const cwdBasename = path.basename(this.sessionManager.getCwd());
-		const sessionName = this.sessionManager.getSessionName();
+		const cwdBasename = path.basename(this.runtimeSnapshot.agent.cwd);
+		const sessionName = this.runtimeSnapshot.session.sessionName;
 		if (sessionName) {
 			this.ui.terminal.setTitle(`${APP_TITLE} - ${sessionName} - ${cwdBasename}`);
 		} else {
@@ -745,7 +755,7 @@ export class InteractiveMode {
 			this.showWarning(`Migrated credentials to auth.json: ${migratedProviders.join(", ")}`);
 		}
 
-		const modelsJsonError = this.session.modelRegistry.getError();
+		const modelsJsonError = this.runtimeSnapshot.modelRegistry.error;
 		if (modelsJsonError) {
 			this.showError(`models.json error: ${modelsJsonError}`);
 		}
@@ -759,7 +769,7 @@ export class InteractiveMode {
 		// Process initial messages
 		if (initialMessage) {
 			try {
-				await this.session.prompt(initialMessage, { images: initialImages });
+				await this.runtimeClient.prompt(initialMessage, { images: initialImages });
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
@@ -769,7 +779,7 @@ export class InteractiveMode {
 		if (initialMessages) {
 			for (const message of initialMessages) {
 				try {
-					await this.session.prompt(message);
+					await this.runtimeClient.prompt(message);
 				} catch (error: unknown) {
 					const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 					this.showError(errorMessage);
@@ -781,7 +791,7 @@ export class InteractiveMode {
 		while (true) {
 			const userInput = await this.getUserInput();
 			try {
-				await this.session.prompt(userInput);
+				await this.runtimeClient.prompt(userInput);
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
@@ -860,7 +870,7 @@ export class InteractiveMode {
 	 */
 	private getChangelogForDisplay(): string | undefined {
 		// Skip changelog for resumed/continued sessions (already have messages)
-		if (this.session.state.messages.length > 0) {
+		if (this.runtimeSnapshot.transcript.entries.some((entry) => entry.type === "message")) {
 			return undefined;
 		}
 
@@ -1483,13 +1493,13 @@ export class InteractiveMode {
 	 */
 	private async bindCurrentSessionExtensions(): Promise<void> {
 		const uiContext = this.createExtensionUIContext();
-		await this.session.bindExtensions({
+		await this.runtimeClient.bindUI({
 			uiContext,
 			abortHandler: () => {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			},
 			commandContextActions: {
-				waitForIdle: () => this.session.agent.waitForIdle(),
+				waitForIdle: () => this.runtimeClient.waitForIdle(),
 				newSession: async (options) => {
 					if (this.loadingAnimation) {
 						this.loadingAnimation.stop();
@@ -1497,7 +1507,7 @@ export class InteractiveMode {
 					}
 					this.statusContainer.clear();
 					try {
-						const result = await this.runtimeHost.newSession(options);
+						const result = await this.runtimeClient.newSession(options);
 						if (!result.cancelled) {
 							this.renderCurrentSessionState();
 							this.ui.requestRender();
@@ -1509,7 +1519,7 @@ export class InteractiveMode {
 				},
 				fork: async (entryId, options) => {
 					try {
-						const result = await this.runtimeHost.fork(entryId, options);
+						const result = await this.runtimeClient.fork(entryId, options);
 						if (!result.cancelled) {
 							this.renderCurrentSessionState();
 							this.editor.setText(result.selectedText ?? "");
@@ -1571,7 +1581,7 @@ export class InteractiveMode {
 		configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
 		this.footer.setSession(this.session);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
-		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
+		this.footerDataProvider.setCwd(this.runtimeSnapshot.agent.cwd);
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
@@ -1611,7 +1621,7 @@ export class InteractiveMode {
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.pendingTools.clear();
-		this.renderRuntimeSnapshot(this.runtimeHost.getSnapshot(), {
+		this.renderRuntimeSnapshot(this.runtimeSnapshot, {
 			updateFooter: true,
 			populateHistory: true,
 		});
@@ -2412,7 +2422,7 @@ export class InteractiveMode {
 					const now = Date.now();
 					if (now - this.lastEscapeTime < 500) {
 						if (action === "tree") {
-							this.showTreeSelector();
+							void this.showTreeSelector();
 						} else {
 							this.showUserMessageSelector();
 						}
@@ -2441,7 +2451,9 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
-		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
+		this.defaultEditor.onAction("app.session.tree", () => {
+			void this.showTreeSelector();
+		});
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
 
@@ -2554,7 +2566,7 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/tree") {
-				this.showTreeSelector();
+				void this.showTreeSelector();
 				this.editor.setText("");
 				return;
 			}
@@ -2633,7 +2645,7 @@ export class InteractiveMode {
 				if (this.isExtensionCommand(text)) {
 					this.editor.addToHistory?.(text);
 					this.editor.setText("");
-					await this.session.prompt(text);
+					await this.runtimeClient.prompt(text);
 				} else {
 					this.queueCompactionMessage(text, "steer");
 				}
@@ -2645,7 +2657,7 @@ export class InteractiveMode {
 			if (this.session.isStreaming) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				await this.session.prompt(text, { streamingBehavior: "steer" });
+				await this.runtimeClient.prompt(text, { streamingBehavior: "steer" });
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
 				return;
@@ -3282,7 +3294,7 @@ export class InteractiveMode {
 	}
 
 	renderInitialMessages(): void {
-		this.renderRuntimeSnapshot(this.runtimeHost.getSnapshot(), {
+		this.renderRuntimeSnapshot(this.runtimeSnapshot, {
 			updateFooter: true,
 			populateHistory: true,
 		});
@@ -3299,7 +3311,7 @@ export class InteractiveMode {
 
 	private rebuildChatFromMessages(): void {
 		this.chatContainer.clear();
-		this.renderRuntimeSnapshot(this.runtimeHost.getSnapshot());
+		this.renderRuntimeSnapshot(this.runtimeSnapshot);
 	}
 
 	// =========================================================================
@@ -3481,7 +3493,7 @@ export class InteractiveMode {
 			if (this.isExtensionCommand(text)) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				await this.session.prompt(text);
+				await this.runtimeClient.prompt(text);
 			} else {
 				this.queueCompactionMessage(text, "followUp");
 			}
@@ -3493,7 +3505,7 @@ export class InteractiveMode {
 		if (this.session.isStreaming) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
-			await this.session.prompt(text, { streamingBehavior: "followUp" });
+			await this.runtimeClient.prompt(text, { streamingBehavior: "followUp" });
 			this.updatePendingMessagesDisplay();
 			this.ui.requestRender();
 		}
@@ -3517,28 +3529,33 @@ export class InteractiveMode {
 		if (this.isBashMode) {
 			this.editor.borderColor = theme.getBashModeBorderColor();
 		} else {
-			const level = this.session.thinkingLevel || "off";
+			const level = this.runtimeSnapshot.agent.thinkingLevel || "off";
 			this.editor.borderColor = theme.getThinkingBorderColor(level);
 		}
 		this.ui.requestRender();
 	}
 
 	private cycleThinkingLevel(): void {
-		const newLevel = this.session.cycleThinkingLevel();
-		if (newLevel === undefined) {
-			this.showStatus("Current model does not support thinking");
-		} else {
-			this.footer.invalidate();
-			this.updateEditorBorderColor();
-			this.showStatus(`Thinking level: ${newLevel}`);
-		}
+		void (async () => {
+			const newLevel = await this.runtimeClient.cycleThinkingLevel();
+			if (newLevel === undefined) {
+				this.showStatus("Current model does not support thinking");
+			} else {
+				this.footer.invalidate();
+				this.updateEditorBorderColor();
+				this.showStatus(`Thinking level: ${newLevel}`);
+			}
+		})();
 	}
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
 		try {
-			const result = await this.session.cycleModel(direction);
+			const result = await this.runtimeClient.cycleModel(direction);
 			if (result === undefined) {
-				const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
+				const msg =
+					this.runtimeSnapshot.config.scopedModels.length > 0
+						? "Only one model in scope"
+						: "Only one model available";
 				this.showStatus(msg);
 			} else {
 				this.footer.invalidate();
@@ -3844,7 +3861,7 @@ export class InteractiveMode {
 				// When retry is pending, queue messages for the retry turn
 				for (const message of queuedMessages) {
 					if (this.isExtensionCommand(message.text)) {
-						await this.session.prompt(message.text);
+						await this.runtimeClient.prompt(message.text);
 					} else if (message.mode === "followUp") {
 						await this.session.followUp(message.text);
 					} else {
@@ -3860,7 +3877,7 @@ export class InteractiveMode {
 			if (firstPromptIndex === -1) {
 				// All extension commands - execute them all
 				for (const message of queuedMessages) {
-					await this.session.prompt(message.text);
+					await this.runtimeClient.prompt(message.text);
 				}
 				return;
 			}
@@ -3871,18 +3888,18 @@ export class InteractiveMode {
 			const rest = queuedMessages.slice(firstPromptIndex + 1);
 
 			for (const message of preCommands) {
-				await this.session.prompt(message.text);
+				await this.runtimeClient.prompt(message.text);
 			}
 
 			// Send first prompt (starts streaming)
-			const promptPromise = this.session.prompt(firstPrompt.text).catch((error) => {
+			const promptPromise = this.runtimeClient.prompt(firstPrompt.text).catch((error) => {
 				restoreQueue(error);
 			});
 
 			// Queue remaining messages
 			for (const message of rest) {
 				if (this.isExtensionCommand(message.text)) {
-					await this.session.prompt(message.text);
+					await this.runtimeClient.prompt(message.text);
 				} else if (message.mode === "followUp") {
 					await this.session.followUp(message.text);
 				} else {
@@ -3936,11 +3953,11 @@ export class InteractiveMode {
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
 					blockImages: this.settingsManager.getBlockImages(),
 					enableSkillCommands: this.settingsManager.getEnableSkillCommands(),
-					steeringMode: this.session.steeringMode,
-					followUpMode: this.session.followUpMode,
+					steeringMode: this.runtimeSnapshot.config.steeringMode,
+					followUpMode: this.runtimeSnapshot.config.followUpMode,
 					transport: this.settingsManager.getTransport(),
 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
-					thinkingLevel: this.session.thinkingLevel,
+					thinkingLevel: this.runtimeSnapshot.agent.thinkingLevel,
 					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
 					currentTheme: this.settingsManager.getTheme() || "dark",
 					availableThemes: getAvailableThemes(),
@@ -3989,10 +4006,10 @@ export class InteractiveMode {
 						this.setupAutocompleteProvider();
 					},
 					onSteeringModeChange: (mode) => {
-						this.session.setSteeringMode(mode);
+						void this.runtimeClient.setSteeringMode(mode);
 					},
 					onFollowUpModeChange: (mode) => {
-						this.session.setFollowUpMode(mode);
+						void this.runtimeClient.setFollowUpMode(mode);
 					},
 					onTransportChange: (transport) => {
 						this.settingsManager.setTransport(transport);
@@ -4004,7 +4021,7 @@ export class InteractiveMode {
 						this.showStatus(`HTTP idle timeout: ${formatHttpIdleTimeoutMs(timeoutMs)}`);
 					},
 					onThinkingLevelChange: (level) => {
-						this.session.setThinkingLevel(level);
+						void this.runtimeClient.setThinkingLevel(level);
 						this.footer.invalidate();
 						this.updateEditorBorderColor();
 					},
@@ -4096,7 +4113,7 @@ export class InteractiveMode {
 		const model = await this.findExactModelMatch(searchTerm);
 		if (model) {
 			try {
-				await this.session.setModel(model);
+				await this.runtimeClient.setModel(model);
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
 				this.showStatus(`Model: ${model.id}`);
@@ -4178,7 +4195,7 @@ export class InteractiveMode {
 				this.session.scopedModels,
 				async (model) => {
 					try {
-						await this.session.setModel(model);
+						await this.runtimeClient.setModel(model);
 						this.footer.invalidate();
 						this.updateEditorBorderColor();
 						done();
@@ -4292,7 +4309,7 @@ export class InteractiveMode {
 				userMessages.map((m) => ({ id: m.entryId, text: m.text })),
 				async (entryId) => {
 					try {
-						const result = await this.runtimeHost.fork(entryId);
+						const result = await this.runtimeClient.fork(entryId);
 						if (result.cancelled) {
 							done();
 							this.ui.requestRender();
@@ -4326,7 +4343,7 @@ export class InteractiveMode {
 		}
 
 		try {
-			const result = await this.runtimeHost.fork(leafId, { position: "at" });
+			const result = await this.runtimeClient.fork(leafId, { position: "at" });
 			if (result.cancelled) {
 				this.ui.requestRender();
 				return;
@@ -4340,8 +4357,8 @@ export class InteractiveMode {
 		}
 	}
 
-	private showTreeSelector(initialSelectedId?: string): void {
-		const tree = this.sessionManager.getTree();
+	private async showTreeSelector(initialSelectedId?: string): Promise<void> {
+		const tree = await this.runtimeClient.getSessionTree();
 		const realLeafId = this.sessionManager.getLeafId();
 		const initialFilterMode = this.settingsManager.getTreeFilterMode();
 
@@ -4381,7 +4398,7 @@ export class InteractiveMode {
 
 							if (summaryChoice === undefined) {
 								// User pressed escape - re-show tree selector with same selection
-								this.showTreeSelector(entryId);
+								void this.showTreeSelector(entryId);
 								return;
 							}
 
@@ -4428,7 +4445,7 @@ export class InteractiveMode {
 						if (result.aborted) {
 							// Summarization aborted - re-show tree selector with same selection
 							this.showStatus("Branch summarization cancelled");
-							this.showTreeSelector(entryId);
+							void this.showTreeSelector(entryId);
 							return;
 						}
 						if (result.cancelled) {
@@ -4514,7 +4531,7 @@ export class InteractiveMode {
 		}
 		this.statusContainer.clear();
 		try {
-			const result = await this.runtimeHost.switchSession(sessionPath, {
+			const result = await this.runtimeClient.switchSession(sessionPath, {
 				withSession: options?.withSession,
 			});
 			if (result.cancelled) {
@@ -4530,7 +4547,7 @@ export class InteractiveMode {
 					this.showStatus("Resume cancelled");
 					return { cancelled: true };
 				}
-				const result = await this.runtimeHost.switchSession(sessionPath, {
+				const result = await this.runtimeClient.switchSession(sessionPath, {
 					cwdOverride: selectedCwd,
 					withSession: options?.withSession,
 				});
@@ -4726,7 +4743,7 @@ export class InteractiveMode {
 					selectionError = `${actionLabel}, but its default model "${defaultModelId}" is not available. Use /model to select a model.`;
 				} else {
 					try {
-						await this.session.setModel(selectedModel);
+						await this.runtimeClient.setModel(selectedModel);
 					} catch (error: unknown) {
 						selectedModel = undefined;
 						const errorMessage = error instanceof Error ? error.message : String(error);
@@ -5099,7 +5116,7 @@ export class InteractiveMode {
 				this.loadingAnimation = undefined;
 			}
 			this.statusContainer.clear();
-			const result = await this.runtimeHost.importFromJsonl(inputPath);
+			const result = await this.runtimeClient.importFromJsonl(inputPath);
 			if (result.cancelled) {
 				this.showStatus("Import cancelled");
 				return;
@@ -5113,7 +5130,7 @@ export class InteractiveMode {
 					this.showStatus("Import cancelled");
 					return;
 				}
-				const result = await this.runtimeHost.importFromJsonl(inputPath, selectedCwd);
+				const result = await this.runtimeClient.importFromJsonl(inputPath, selectedCwd);
 				if (result.cancelled) {
 					this.showStatus("Import cancelled");
 					return;
@@ -5242,7 +5259,7 @@ export class InteractiveMode {
 	private handleNameCommand(text: string): void {
 		const name = text.replace(/^\/name\s*/, "").trim();
 		if (!name) {
-			const currentName = this.sessionManager.getSessionName();
+			const currentName = this.runtimeSnapshot.session.sessionName;
 			if (currentName) {
 				this.chatContainer.addChild(new Spacer(1));
 				this.chatContainer.addChild(new Text(theme.fg("dim", `Session name: ${currentName}`), 1, 0));
@@ -5261,7 +5278,7 @@ export class InteractiveMode {
 
 	private handleSessionCommand(): void {
 		const stats = this.session.getSessionStats();
-		const sessionName = this.sessionManager.getSessionName();
+		const sessionName = this.runtimeSnapshot.session.sessionName;
 
 		let info = `${theme.bold("Session Info")}\n\n`;
 		if (sessionName) {
@@ -5453,7 +5470,7 @@ export class InteractiveMode {
 		}
 		this.statusContainer.clear();
 		try {
-			const result = await this.runtimeHost.newSession();
+			const result = await this.runtimeClient.newSession();
 			if (result.cancelled) {
 				return;
 			}
@@ -5647,6 +5664,7 @@ export class InteractiveMode {
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}
+		this.runtimeClient.detach();
 		if (this.isInitialized) {
 			this.ui.stop();
 			this.isInitialized = false;

@@ -3,6 +3,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { AgentRuntimeAttachResult, AgentRuntimeEvent, AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
 import type { ExtensionBindings, ModelCycleResult, PromptOptions } from "./agent-session.ts";
 import type { AgentSessionRuntime } from "./agent-session-runtime.ts";
+import type { SessionTreeNode } from "./session-manager.ts";
 
 export type RuntimeQueueMode = "all" | "one-at-a-time";
 
@@ -34,6 +35,7 @@ export interface RuntimeClient {
 	cycleThinkingLevel(): Promise<ThinkingLevel | undefined>;
 	setSteeringMode(mode: RuntimeQueueMode): Promise<void>;
 	setFollowUpMode(mode: RuntimeQueueMode): Promise<void>;
+	getSessionTree(): Promise<SessionTreeNode[]>;
 }
 
 export type AgentRuntimeStoreListener = (snapshot: AgentRuntimeSnapshot, event?: AgentRuntimeEvent) => void;
@@ -231,6 +233,10 @@ export class InProcessRuntimeClient implements RuntimeClient {
 	async setFollowUpMode(mode: RuntimeQueueMode): Promise<void> {
 		this.runtime.session.setFollowUpMode(mode);
 		this.refreshFromRuntime();
+	}
+
+	async getSessionTree(): Promise<SessionTreeNode[]> {
+		return this.runtime.session.sessionManager.getTree();
 	}
 
 	private refreshFromRuntime(): void {

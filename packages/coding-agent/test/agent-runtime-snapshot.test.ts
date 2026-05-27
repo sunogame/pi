@@ -211,4 +211,24 @@ describe("Agent runtime snapshot", () => {
 		await client.unbindUI();
 		expect(runtimeHost.session.extensionRunner.hasUI()).toBe(false);
 	});
+
+	it("loads the session tree lazily through the in-process runtime client", async () => {
+		const { runtimeHost } = await createRuntimeHost();
+		const client = createInProcessRuntimeClient(runtimeHost);
+
+		await client.prompt("hello");
+
+		const tree = await client.getSessionTree();
+		expect(tree.length).toBe(1);
+		const stack = [...tree];
+		let messageCount = 0;
+		while (stack.length > 0) {
+			const node = stack.pop()!;
+			if (node.entry.type === "message") {
+				messageCount += 1;
+			}
+			stack.push(...node.children);
+		}
+		expect(messageCount).toBe(2);
+	});
 });
