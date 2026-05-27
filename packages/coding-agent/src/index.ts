@@ -196,6 +196,7 @@ export {
 } from "./core/extensions/index.ts";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
+export { attachJsonlLineReader, serializeJsonLine } from "./core/jsonl.ts";
 export { convertToLlm } from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
 export type {
@@ -224,6 +225,12 @@ export {
 	type RuntimeQueueMode,
 	type RuntimeSwitchSessionOptions,
 } from "./core/runtime-client.ts";
+export {
+	createStreamRuntimeTransport,
+	type RuntimeTransport,
+	RuntimeTransportClosedError,
+	StreamRuntimeTransport,
+} from "./core/runtime-transport.ts";
 // SDK for programmatic usage
 export {
 	AgentSessionRuntime,

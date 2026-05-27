@@ -88,6 +88,7 @@ export {
 	type TurnStartEvent,
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
+export { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 export {
 	AgentRuntimeStore,
 	type AgentRuntimeStoreListener,
@@ -103,4 +104,10 @@ export {
 	type RuntimeQueueMode,
 	type RuntimeSwitchSessionOptions,
 } from "./runtime-client.ts";
+export {
+	createStreamRuntimeTransport,
+	type RuntimeTransport,
+	RuntimeTransportClosedError,
+	StreamRuntimeTransport,
+} from "./runtime-transport.ts";
 export { createSyntheticSourceInfo } from "./source-info.ts";
