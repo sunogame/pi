@@ -61,13 +61,15 @@ and appends a concise discovery section to the system prompt:
 ```xml
 <a2a_rules>
 Peer agents are available through A2A-style tools.
-Use Agent Cards to choose the right peer. Peer agents are opaque, so include the needed context in every message.
+Use Agent Cards to choose the right peer.
 a2a_send_message creates a peer-owned A2A Task. Non-terminal tasks are watched automatically and later produce <a2a-task-notification> runtime notifications.
 <receiving>
 When you receive an <a2a-message>, answer it directly in the current turn. That assistant response completes the peer-owned Task.
 </receiving>
 <notifications>
 An <a2a-task-notification> is a runtime notification, not a human message.
+A notification message may contain multiple task notifications; handle each task id separately.
+If a watcher reports timeout or error, use a2a_get_task once for the latest status, then decide whether to retry, summarize uncertainty, or ask the user.
 </notifications>
 </a2a_rules>
 
@@ -82,6 +84,8 @@ An <a2a-task-notification> is a runtime notification, not a human message.
 
 This mirrors pi's existing skill disclosure style: the model gets a short rule
 block plus machine-readable XML.
+The current runtime's own card is filtered out of the model-visible peer list;
+agents still cannot send A2A messages to themselves.
 
 ## Tools
 

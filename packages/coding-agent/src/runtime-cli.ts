@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { resolve } from "node:path";
 import chalk from "chalk";
 import { APP_NAME, getAgentDir } from "./config.ts";
 import type { AgentRuntimeSnapshot } from "./core/agent-runtime-snapshot.ts";
 import { createIpcRuntimeClient } from "./core/ipc-runtime-client.ts";
 import {
+	getRuntimeLogPath,
+	getRuntimeRegistryDir,
 	listRuntimeRegistryEntries,
 	type RuntimeRegistryEntry,
 	readRuntimeRegistryEntry,
@@ -168,18 +170,21 @@ export async function startRuntime(options: RuntimeStartOptions): Promise<Runtim
 		options.agentId,
 		...(options.socketPath ? ["--runtime-socket", options.socketPath] : []),
 	];
+	const logPath = prepareRuntimeLog(getAgentDir(), options.agentId, options.cwd, args);
+	const logFd = openSync(logPath, "a");
 	const child = spawn(process.execPath, [entrypoint, ...args], {
 		cwd: options.cwd,
 		env: process.env,
 		detached: true,
-		stdio: "ignore",
+		stdio: ["ignore", logFd, logFd],
 	});
+	closeSync(logFd);
 	child.unref();
 	const entry = await waitForRuntimeEntryOrExit(getAgentDir(), options.agentId, 10_000, child);
 	if (!entry) {
-		throw new Error(`Started runtime "${options.agentId}" but it did not register within 10s`);
+		throw new Error(`Started runtime "${options.agentId}" but it did not register within 10s. See ${logPath}`);
 	}
-	console.log(`Started runtime "${options.agentId}" pid=${entry.pid} socket=${entry.socketPath}`);
+	console.log(`Started runtime "${options.agentId}" pid=${entry.pid} socket=${entry.socketPath} log=${logPath}`);
 	return entry;
 }
 
@@ -226,7 +231,7 @@ async function waitForRuntimeEntryOrExit(
 		}
 		if (exited) {
 			throw new Error(
-				`Runtime "${agentId}" exited before registering (code=${exited.code ?? "null"} signal=${exited.signal ?? "null"})`,
+				`Runtime "${agentId}" exited before registering (code=${exited.code ?? "null"} signal=${exited.signal ?? "null"}). See ${getRuntimeLogPath(agentDir, agentId)}`,
 			);
 		}
 		await delay(100);
@@ -242,6 +247,23 @@ async function waitForRuntimeExit(agentDir: string, agentId: string, timeoutMs: 
 		}
 		await delay(100);
 	}
+}
+
+function prepareRuntimeLog(agentDir: string, agentId: string, cwd: string, args: readonly string[]): string {
+	mkdirSync(getRuntimeRegistryDir(agentDir), { recursive: true });
+	const logPath = getRuntimeLogPath(agentDir, agentId);
+	appendFileSync(
+		logPath,
+		[
+			"",
+			`===== ${new Date().toISOString()} starting runtime ${agentId} =====`,
+			`cwd: ${cwd}`,
+			`argv: ${process.execPath} ${process.argv[1] ?? ""} ${args.join(" ")}`,
+			"",
+		].join("\n"),
+		"utf8",
+	);
+	return logPath;
 }
 
 function createPlaceholderSnapshot(entry: RuntimeRegistryEntry): AgentRuntimeSnapshot {

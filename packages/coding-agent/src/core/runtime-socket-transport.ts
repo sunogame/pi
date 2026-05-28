@@ -70,6 +70,7 @@ export async function listenRuntimeSocket(
 		server.once("error", onError);
 		server.listen(socketPath);
 	});
+	server.on("error", () => {});
 
 	return {
 		socketPath,

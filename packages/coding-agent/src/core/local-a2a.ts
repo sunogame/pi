@@ -230,7 +230,6 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 				"When a2a_send_message returns a non-terminal Task, pi automatically starts an A2A task watcher and will notify you when the task reaches a terminal state. Do not start a shell monitor for A2A tasks.",
 				"blocking=true is only an immediate-start optimization; queued tasks return without waiting to avoid deadlocks.",
 				"When you receive an <a2a-message>, answer it directly in the current turn. Your assistant response completes the sender's Task; do not call a2a_send_message back unless you need to start a separate new task.",
-				"Use a2a_get_task only when you need an immediate status refresh before the automatic notification arrives, or when recovering a task by id.",
 			],
 			parameters: sendMessageSchema,
 			executionMode: "sequential",
@@ -271,6 +270,7 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 			promptGuidelines: [
 				"Use a2a_get_task only for an immediate status refresh or when recovering a task by id.",
 				"If a2a_send_message already started an automatic watcher, prefer waiting for the a2a-task-notification instead of polling repeatedly.",
+				"If a watcher reports timeout or error, call a2a_get_task once for the latest status before deciding whether to retry or report uncertainty.",
 			],
 			parameters: getTaskSchema,
 			executionMode: "sequential",
@@ -460,19 +460,27 @@ async function watchA2ATaskByEvent(
 		done = true;
 		clearTimeout(timeout);
 		activeA2ATaskWatchers.delete(key);
-		client?.detach();
+		// Closing the transport is enough to detach this watcher. Sending an
+		// explicit detach request here creates a pending IPC request that close()
+		// immediately rejects, which can surface as an unhandled rejection.
 		client?.close();
 		options.onRuntimeNotification?.(createA2ATaskNotification(agent, next, notificationStatus, error));
 	};
 	const timeout = setTimeout(
 		() => {
 			void (async () => {
+				if (done) {
+					return;
+				}
 				try {
 					if (client) {
 						lastKnownTask = await client.a2aGetTask({ id: task.id, historyLength: 0 });
 					}
 				} catch {
 					// Keep the last known task for the timeout notification.
+				}
+				if (done) {
+					return;
 				}
 				finish(lastKnownTask, "watcher-timeout", "A2A task monitor timed out.");
 			})();
@@ -498,10 +506,19 @@ async function watchA2ATaskByEvent(
 				};
 				if (TERMINAL_A2A_STATES.has(event.task.state)) {
 					void (async () => {
+						if (done) {
+							return;
+						}
 						try {
 							lastKnownTask = (await client?.a2aGetTask({ id: task.id, historyLength: 0 })) ?? lastKnownTask;
+							if (done) {
+								return;
+							}
 							finish(lastKnownTask);
 						} catch (error) {
+							if (done) {
+								return;
+							}
 							finish(lastKnownTask, "watcher-error", error instanceof Error ? error.message : String(error));
 						}
 					})();

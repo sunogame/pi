@@ -29,14 +29,17 @@ export class IpcRuntimeClient implements RuntimeClient {
 	private readonly transport: RuntimeTransport;
 	private readonly pending = new Map<string, PendingRequest>();
 	private readonly unsubscribeTransport: () => void;
+	private readonly unsubscribeTransportClose: () => void;
 	private requestId = 0;
 	private liveListener?: (event: AgentRuntimeEvent) => void;
 	private attachInbox: AgentRuntimeEvent[] | undefined;
+	private closed = false;
 
 	constructor(transport: RuntimeTransport, initialSnapshot: AgentRuntimeSnapshot) {
 		this.transport = transport;
 		this.store = new AgentRuntimeStore(initialSnapshot);
 		this.unsubscribeTransport = transport.onLine((line) => this.handleLine(line));
+		this.unsubscribeTransportClose = transport.onClose(() => this.close());
 	}
 
 	async attach(options: RuntimeClientAttachOptions = {}): Promise<AgentRuntimeAttachResult> {
@@ -130,7 +133,12 @@ export class IpcRuntimeClient implements RuntimeClient {
 	}
 
 	close(): void {
+		if (this.closed) {
+			return;
+		}
+		this.closed = true;
 		this.unsubscribeTransport();
+		this.unsubscribeTransportClose();
 		this.transport.close();
 		for (const pending of this.pending.values()) {
 			pending.reject(new Error("Runtime IPC client closed"));
@@ -150,7 +158,7 @@ export class IpcRuntimeClient implements RuntimeClient {
 		}
 		this.liveListener?.(event);
 		if (event.type === "session_changed" || event.type === "transcript_changed") {
-			void this.refreshFromRuntime();
+			void this.refreshFromRuntime().catch(() => {});
 		}
 	}
 
@@ -158,12 +166,20 @@ export class IpcRuntimeClient implements RuntimeClient {
 		method: M,
 		params: RuntimeIpcRequestParams[M],
 	): Promise<RuntimeIpcResult[M]> {
+		if (this.closed) {
+			throw new Error("Runtime IPC client closed");
+		}
 		const id = String(++this.requestId);
 		const request: RuntimeIpcRequest<M> = params === undefined ? { id, method } : { id, method, params };
 		const promise = new Promise<RuntimeIpcResult[M]>((resolve, reject) => {
 			this.pending.set(id, { resolve, reject } as PendingRequest);
 		});
-		await this.transport.send(serializeJsonLine(request));
+		try {
+			await this.transport.send(serializeJsonLine(request));
+		} catch (error) {
+			this.pending.delete(id);
+			throw error;
+		}
 		return promise;
 	}
 

@@ -151,12 +151,15 @@ export class MonitorManager {
 			notificationTimestamps: [],
 			finalized: false,
 		};
+		outputStream.on("error", (error) => {
+			this.failAndStop(task, `Monitor output file error: ${error.message}`);
+		});
 		this.monitors.set(id, task);
 		this.onMonitorStarted?.(this.clone(snapshot));
 
 		child.stdout?.on("data", (data: Buffer) => this.handleStdout(task, data));
 		child.stderr?.on("data", (data: Buffer) => {
-			outputStream.write(data);
+			this.writeOutput(task, data);
 		});
 
 		const timeoutMs = options.timeoutSeconds
@@ -208,7 +211,7 @@ export class MonitorManager {
 	}
 
 	private handleStdout(task: MonitorTaskInternal, data: Buffer): void {
-		task.outputStream.write(data);
+		this.writeOutput(task, data);
 		const text = sanitizeBinaryOutput(stripAnsi(data.toString("utf8"))).replace(/\r/g, "");
 		task.lineBuffer += text;
 		let newlineIndex = task.lineBuffer.indexOf("\n");
@@ -218,6 +221,13 @@ export class MonitorManager {
 			this.enqueueLine(task, line);
 			newlineIndex = task.lineBuffer.indexOf("\n");
 		}
+	}
+
+	private writeOutput(task: MonitorTaskInternal, data: Buffer): void {
+		if (task.outputStream.destroyed || task.outputStream.closed) {
+			return;
+		}
+		task.outputStream.write(data);
 	}
 
 	private enqueueLine(task: MonitorTaskInternal, line: string): void {

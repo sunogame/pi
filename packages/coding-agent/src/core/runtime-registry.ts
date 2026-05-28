@@ -42,6 +42,10 @@ export function getRuntimeStatePath(agentDir: string, agentId: string): string {
 	return join(getRuntimeRegistryDir(agentDir), `${sanitizeRuntimeId(agentId)}.state.json`);
 }
 
+export function getRuntimeLogPath(agentDir: string, agentId: string): string {
+	return join(getRuntimeRegistryDir(agentDir), `${sanitizeRuntimeId(agentId)}.log`);
+}
+
 export function sanitizeRuntimeId(agentId: string): string {
 	const sanitized = agentId.trim().replace(/[^A-Za-z0-9._-]/g, "_");
 	return sanitized.length > 0 ? sanitized : "runtime";

@@ -64,13 +64,25 @@ description: Handles APIs.
 					cwd: "/work/backend",
 					url: "pi-runtime://backend",
 				},
+				{
+					name: "qa",
+					description: "Tests contracts.",
+					version: "1.0.0",
+					capabilities: {},
+					defaultInputModes: ["text/plain"],
+					defaultOutputModes: ["text/plain"],
+					cwd: "/work/qa",
+					url: "pi-runtime://qa",
+				},
 			],
 			"backend",
 		);
 
-		expect(prompt).toContain('<agent_card name="backend" self="true">');
 		expect(prompt).toContain("<a2a_rules>");
-		expect(prompt).toContain("<description>Handles APIs.</description>");
+		expect(prompt).not.toContain('name="backend"');
+		expect(prompt).toContain('<agent_card name="qa">');
+		expect(prompt).toContain("<description>Tests contracts.</description>");
+		expect(prompt).toContain("multiple task notifications");
 		expect(prompt).not.toContain("local A2A");
 		expect(prompt).not.toContain("pi-runtime://backend");
 		expect(prompt).not.toContain("<skills>");

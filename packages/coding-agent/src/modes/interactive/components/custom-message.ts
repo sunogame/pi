@@ -160,7 +160,7 @@ function renderA2AMessage(raw: string): Component | undefined {
 		return undefined;
 	}
 
-	const container = new Container();
+	const container = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
 	const from = message.from ? ` from ${theme.fg("accent", message.from)}` : "";
 	const header = `${theme.fg("accent", "●")} ${theme.fg("toolTitle", theme.bold("A2A message"))}${from}`;
 	container.addChild(new Text(header, 0, 0));
@@ -196,6 +196,7 @@ function renderA2ATaskNotification(raw: string): Component | undefined {
 		if (index > 0) {
 			container.addChild(new Spacer(1));
 		}
+		const box = new Box(1, 1, (text) => theme.bg(getA2ATaskBg(notification), text));
 		const state = notification.state ?? notification.notificationStatus ?? "updated";
 		const stateLabel =
 			state === "completed"
@@ -205,11 +206,11 @@ function renderA2ATaskNotification(raw: string): Component | undefined {
 					: theme.fg("warning", state);
 		const agent = notification.agent ? ` · ${theme.fg("accent", notification.agent)}` : "";
 		const header = `${theme.fg("accent", "●")} ${theme.fg("toolTitle", theme.bold("A2A task"))} · ${stateLabel}${agent}`;
-		container.addChild(new Text(header, 0, 0));
+		box.addChild(new Text(header, 0, 0));
 
 		const body = notification.artifact || notification.message;
 		if (body) {
-			container.addChild(
+			box.addChild(
 				new Text(
 					body
 						.trimEnd()
@@ -227,11 +228,23 @@ function renderA2ATaskNotification(raw: string): Component | undefined {
 		if (notification.contextId) meta.push(`context ${shortId(notification.contextId)}`);
 		if (notification.error) meta.push(notification.error);
 		if (meta.length > 0) {
-			container.addChild(new Text(theme.fg(notification.error ? "error" : "muted", `  ${meta.join(" · ")}`), 0, 0));
+			box.addChild(new Text(theme.fg(notification.error ? "error" : "muted", `  ${meta.join(" · ")}`), 0, 0));
 		}
+		container.addChild(box);
 	}
 
 	return container;
+}
+
+function getA2ATaskBg(notification: A2ATaskNotificationView): "toolSuccessBg" | "toolErrorBg" | "toolPendingBg" {
+	const state = notification.state ?? notification.notificationStatus ?? "updated";
+	if (state === "completed") {
+		return "toolSuccessBg";
+	}
+	if (state === "failed" || state === "canceled" || state === "rejected" || notification.error) {
+		return "toolErrorBg";
+	}
+	return "toolPendingBg";
 }
 
 function parseA2AMessage(raw: string): A2AMessageView | undefined {

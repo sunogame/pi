@@ -146,6 +146,6 @@ description: Backend.
 				},
 				root,
 			),
-		).toThrow(/frontmatter name must match runtime id/);
+		).toThrow(/must match runtime id/);
 	});
 });

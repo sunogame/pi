@@ -213,11 +213,23 @@ export class RuntimeIpcServer {
 	}
 
 	private async sendResponse(response: RuntimeIpcResponse): Promise<void> {
-		await this.transport.send(serializeJsonLine(response));
+		try {
+			await this.transport.send(serializeJsonLine(response));
+		} catch (error) {
+			this.handleSendError(error);
+		}
 	}
 
 	private async sendNotification(notification: RuntimeIpcNotification): Promise<void> {
-		await this.transport.send(serializeJsonLine(notification));
+		try {
+			await this.transport.send(serializeJsonLine(notification));
+		} catch (error) {
+			this.handleSendError(error);
+		}
+	}
+
+	private handleSendError(_error: unknown): void {
+		this.dispose();
 	}
 
 	private getA2ATasks(): Map<string, A2ATask> {

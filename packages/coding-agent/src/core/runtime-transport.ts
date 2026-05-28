@@ -33,7 +33,9 @@ export class StreamRuntimeTransport implements RuntimeTransport {
 		});
 		input.once("end", () => this.markClosed());
 		input.once("close", () => this.markClosed());
+		input.on("error", () => this.markClosed());
 		output.once("close", () => this.markClosed());
+		output.on("error", () => this.markClosed());
 	}
 
 	async send(line: string): Promise<void> {

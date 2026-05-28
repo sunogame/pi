@@ -6,10 +6,14 @@ import type { RuntimeTransport } from "../src/core/runtime-transport.ts";
 
 class MockRuntimeTransport implements RuntimeTransport {
 	readonly sent: string[] = [];
+	failSend?: Error;
 	private readonly listeners = new Set<(line: string) => void>();
 	private readonly closeListeners = new Set<() => void>();
 
 	async send(line: string): Promise<void> {
+		if (this.failSend) {
+			throw this.failSend;
+		}
 		this.sent.push(line);
 	}
 
@@ -168,6 +172,31 @@ describe("IpcRuntimeClient", () => {
 
 		await expect(clear).resolves.toEqual({ cancelled: false });
 		expect(client.store.snapshot.session.sessionName).toBe("new");
+	});
+
+	it("rejects pending requests when the transport closes", async () => {
+		const transport = new MockRuntimeTransport();
+		const client = createIpcRuntimeClient(transport, snapshot(1, "idle"));
+
+		const prompt = client.prompt("hello");
+		transport.close();
+
+		await expect(prompt).rejects.toThrow("Runtime IPC client closed");
+	});
+
+	it("does not leave a pending request behind when send fails", async () => {
+		const transport = new MockRuntimeTransport();
+		const client = createIpcRuntimeClient(transport, snapshot(1, "idle"));
+		transport.failSend = new Error("broken pipe");
+
+		await expect(client.prompt("hello")).rejects.toThrow("broken pipe");
+		transport.failSend = undefined;
+
+		const prompt = client.prompt("again");
+		const request = transport.lastRequest();
+		expect(request).toMatchObject({ id: "2", method: "prompt", params: { text: "again" } });
+		transport.emit({ id: request.id, ok: true, result: {} });
+		await expect(prompt).resolves.toBeUndefined();
 	});
 });
 

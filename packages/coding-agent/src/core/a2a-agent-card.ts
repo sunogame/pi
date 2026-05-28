@@ -93,26 +93,28 @@ export function formatTeamAgentCardsForPrompt(cards: readonly PiA2AAgentCard[], 
 	if (cards.length === 0) {
 		return "";
 	}
+	const peerCards = selfName ? cards.filter((card) => card.name !== selfName) : [...cards];
 
 	const lines = [
 		"<a2a_rules>",
 		"Peer agents are available through A2A-style tools.",
-		"Use Agent Cards to choose the right peer. Peer agents are opaque, so include the needed context in every message.",
+		"Use Agent Cards to choose the right peer.",
 		"a2a_send_message creates a peer-owned A2A Task. Non-terminal tasks are watched automatically and later produce <a2a-task-notification> runtime notifications.",
 		"<receiving>",
 		"When you receive an <a2a-message>, answer it directly in the current turn. That assistant response completes the peer-owned Task.",
 		"</receiving>",
 		"<notifications>",
 		"An <a2a-task-notification> is a runtime notification, not a human message.",
+		"A notification message may contain multiple task notifications; handle each task id separately.",
+		"If a watcher reports timeout or error, use a2a_get_task once for the latest status, then decide whether to retry, summarize uncertainty, or ask the user.",
 		"</notifications>",
 		"</a2a_rules>",
 		"",
 		"<available_peer_agents>",
 	];
 
-	for (const card of cards) {
-		const self = card.name === selfName ? ' self="true"' : "";
-		lines.push(`  <agent_card name="${escapeXml(card.name)}"${self}>`);
+	for (const card of peerCards) {
+		lines.push(`  <agent_card name="${escapeXml(card.name)}">`);
 		lines.push(`    <description>${escapeXml(card.description)}</description>`);
 		lines.push(`    <default_input_modes>${card.defaultInputModes.map(escapeXml).join(", ")}</default_input_modes>`);
 		lines.push(
