@@ -24,6 +24,8 @@ export interface Args {
 	runtimeId?: string;
 	runtimeSocket?: string;
 	attach?: string;
+	teamConfig?: string;
+	teamMemberName?: string;
 	noSession?: boolean;
 	session?: string;
 	fork?: string;
@@ -85,6 +87,10 @@ export function parseArgs(args: string[]): Args {
 			result.runtimeSocket = args[++i];
 		} else if (arg === "--attach" && i + 1 < args.length) {
 			result.attach = args[++i];
+		} else if (arg === "--team-config" && i + 1 < args.length) {
+			result.teamConfig = args[++i];
+		} else if (arg === "--team-member-name" && i + 1 < args.length) {
+			result.teamMemberName = args[++i];
 		} else if (arg === "--continue" || arg === "-c") {
 			result.continue = true;
 		} else if (arg === "--resume" || arg === "-r") {
@@ -234,6 +240,8 @@ ${chalk.bold("Options:")}
   --runtime-id <id>              Runtime process id for socket registry mode
   --runtime-socket <path>        Unix socket path for runtime-ipc or attach-ipc
   --attach <id>                  Attach to a registered runtime by id
+  --team-config <path>           Load local A2A peer Agent Cards from a supervisor config
+  --team-member-name <name>      Agent Card name for this runtime (defaults to runtime id)
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume

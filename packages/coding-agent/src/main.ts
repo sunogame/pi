@@ -15,6 +15,7 @@ import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
+import { formatTeamAgentCardsForPrompt, loadTeamAgentCards } from "./core/a2a-agent-card.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
@@ -27,6 +28,7 @@ import { exportFromFile } from "./core/export-html/index.ts";
 import type { ExtensionFactory } from "./core/extensions/types.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { KeybindingsManager } from "./core/keybindings.ts";
+import { createLocalA2AToolDefinitions } from "./core/local-a2a.ts";
 import type { ModelRegistry } from "./core/model-registry.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
@@ -46,7 +48,7 @@ import { ExtensionSelectorComponent } from "./modes/interactive/components/exten
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { handleRuntimeCommand } from "./runtime-cli.ts";
-import { handleSupervisorCommand } from "./supervisor-cli.ts";
+import { handleSupervisorCommand, loadSupervisorConfig } from "./supervisor-cli.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
 
@@ -556,6 +558,20 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
 	const authStorage = AuthStorage.create();
+	const teamConfigPath = parsed.teamConfig ? resolvePath(parsed.teamConfig, cwd) : undefined;
+	const teamConfig = teamConfigPath ? loadSupervisorConfig(teamConfigPath) : undefined;
+	const teamMemberName = parsed.teamMemberName ?? parsed.runtimeId;
+	const teamPrompt = teamConfig
+		? formatTeamAgentCardsForPrompt(loadTeamAgentCards(teamConfig.runtimes, cwd), teamMemberName)
+		: undefined;
+	const localA2ATools = teamConfig
+		? createLocalA2AToolDefinitions({
+				agentDir,
+				selfName: teamMemberName,
+				teamSpecs: teamConfig.runtimes,
+				configBaseCwd: cwd,
+			})
+		: [];
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 		cwd,
 		agentDir,
@@ -579,6 +595,14 @@ export async function main(args: string[], options?: MainOptions) {
 				noContextFiles: parsed.noContextFiles,
 				systemPrompt: parsed.systemPrompt,
 				appendSystemPrompt: parsed.appendSystemPrompt,
+				appendSystemPromptOverride: teamPrompt
+					? (base) => {
+							if (base.includes(teamPrompt)) {
+								return base;
+							}
+							return [...base, teamPrompt];
+						}
+					: undefined,
 				extensionFactories: options?.extensionFactories,
 			},
 		});
@@ -628,7 +652,10 @@ export async function main(args: string[], options?: MainOptions) {
 			scopedModels: sessionOptions.scopedModels,
 			tools: sessionOptions.tools,
 			noTools: sessionOptions.noTools,
-			customTools: sessionOptions.customTools,
+			customTools:
+				localA2ATools.length > 0
+					? [...(sessionOptions.customTools ?? []), ...localA2ATools]
+					: sessionOptions.customTools,
 		});
 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 		if (created.session.model && cliThinkingOverride) {

@@ -303,6 +303,11 @@ The current supervisor is intentionally lightweight: it starts configured
 runtime processes and relies on the registry for discovery. It is not yet the
 final long-running supervisor service.
 
+Supervisor-started runtimes default to `--continue`, so `pi supervisor restart`
+reopens each runtime's most recent session instead of starting an empty
+transcript. Add `args` such as `["--session", "..."]`, `["--resume"]`,
+`["--fork", "..."]`, or `["--no-session"]` to override session selection.
+
 ## Recommended Workflow
 
 For a local multi-agent project:

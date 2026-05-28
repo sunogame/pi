@@ -1,4 +1,5 @@
 import { Writable } from "node:stream";
+import type { AgentRuntimeEvent } from "../core/agent-runtime-snapshot.ts";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import { takeOverStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
 import type { RuntimeIpcServer } from "../core/runtime-ipc-server.ts";
@@ -79,8 +80,20 @@ async function runRuntimeSocketIpcMode(
 		}
 		writeRuntimeRegistryEntry(agentDir, createRegistryEntry(runtimeHost, runtimeId, socketPath, createdAt));
 	};
-	const unsubscribeRegistryUpdates = runtimeHost.subscribeRuntimeEvents(() => {
-		writeRegistry();
+	let registryWriteTimer: ReturnType<typeof setTimeout> | undefined;
+	const scheduleRegistryWrite = () => {
+		if (registryWriteTimer) {
+			return;
+		}
+		registryWriteTimer = setTimeout(() => {
+			registryWriteTimer = undefined;
+			writeRegistry();
+		}, 75);
+	};
+	const unsubscribeRegistryUpdates = runtimeHost.subscribeRuntimeEvents((event: AgentRuntimeEvent) => {
+		if (event.type === "status_changed" || event.type === "session_changed") {
+			scheduleRegistryWrite();
+		}
 	});
 	writeRegistry();
 	process.stderr.write(`Runtime IPC listening on ${socketPath}\n`);
@@ -97,6 +110,10 @@ async function runRuntimeSocketIpcMode(
 	});
 
 	unsubscribeRegistryUpdates();
+	if (registryWriteTimer) {
+		clearTimeout(registryWriteTimer);
+		registryWriteTimer = undefined;
+	}
 	for (const server of servers) {
 		server.dispose();
 	}

@@ -29,7 +29,17 @@ describe("runtime attach mode", () => {
 
 	test("exposes attach-local slash commands for autocomplete", () => {
 		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).toEqual(
-			expect.arrayContaining(["attach", "runtimes", "broadcast", "abort", "exit", "quit"]),
+			expect.arrayContaining([
+				"attach",
+				"runtimes",
+				"broadcast",
+				"clear",
+				"clear-all",
+				"compact",
+				"abort",
+				"exit",
+				"quit",
+			]),
 		);
 		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).not.toContain("switch");
 		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).not.toContain("next");

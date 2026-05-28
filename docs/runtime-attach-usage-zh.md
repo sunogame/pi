@@ -287,6 +287,10 @@ pi supervisor status --config ./runtimes.json
 当前 supervisor 是有意做轻的：它负责按配置启动 runtime processes，并依赖 registry 做发现。它还不是最终的长驻 supervisor
 service。
 
+supervisor 启动的 runtime 默认带 `--continue`，所以 `pi supervisor restart` 会重新打开每个 runtime 最近一次的 session，
+不会启动一个空 transcript。要覆盖这个行为，可以在 `args` 里显式写 `["--session", "..."]`、`["--resume"]`、
+`["--fork", "..."]` 或 `["--no-session"]`。
+
 ## 推荐工作流
 
 本地 multi-agent 项目可以这样用：

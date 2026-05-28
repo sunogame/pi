@@ -42,6 +42,8 @@ export interface RuntimeClient {
 	abort(): Promise<void>;
 	waitForIdle(): Promise<void>;
 	executeCommand(name: string, args: string): Promise<boolean>;
+	newSession(options?: RuntimeNewSessionOptions): Promise<{ cancelled: boolean }>;
+	compact(customInstructions?: string): Promise<RuntimeCompactionResult>;
 }
 
 /**
@@ -52,7 +54,6 @@ export interface RuntimeClient {
 export interface LocalRuntimeClient extends RuntimeClient {
 	bindUI(bindings: ExtensionBindings): Promise<void>;
 	unbindUI(): Promise<void>;
-	newSession(options?: RuntimeNewSessionOptions): Promise<{ cancelled: boolean }>;
 	switchSession(sessionPath: string, options?: RuntimeSwitchSessionOptions): Promise<{ cancelled: boolean }>;
 	fork(entryId: string, options?: RuntimeForkOptions): Promise<{ cancelled: boolean; selectedText?: string }>;
 	importFromJsonl(inputPath: string, cwdOverride?: string): Promise<{ cancelled: boolean }>;
@@ -70,7 +71,6 @@ export interface LocalRuntimeClient extends RuntimeClient {
 	clearQueue(): Promise<{ steering: string[]; followUp: string[] }>;
 	steer(text: string, images?: ImageContent[]): Promise<void>;
 	followUp(text: string, images?: ImageContent[]): Promise<void>;
-	compact(customInstructions?: string): Promise<RuntimeCompactionResult>;
 	abortCompaction(): Promise<void>;
 	abortRetry(): Promise<void>;
 	abortBranchSummary(): Promise<void>;

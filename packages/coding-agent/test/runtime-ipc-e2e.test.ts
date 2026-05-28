@@ -15,7 +15,7 @@ import { createRuntimeIpcServer } from "../src/core/runtime-ipc-server.ts";
 import { connectRuntimeSocket, listenRuntimeSocket } from "../src/core/runtime-socket-transport.ts";
 import type { RuntimeTransport } from "../src/core/runtime-transport.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { broadcastToRuntimeEntries } from "../src/modes/runtime-attach-mode.ts";
+import { broadcastToRuntimeEntries, clearRuntimeEntries } from "../src/modes/runtime-attach-mode.ts";
 
 class MemoryRuntimeTransport implements RuntimeTransport {
 	peer?: MemoryRuntimeTransport;
@@ -177,6 +177,59 @@ describe("runtime IPC e2e", () => {
 						JSON.stringify(entry.message.content).includes("report status"),
 				),
 		).toBe(true);
+	});
+
+	it("clears live runtime sockets and reports failures", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+		const runtimeHost = await createRuntimeHost();
+		const socketPath = join(tmpdir(), `pi-runtime-clear-e2e-${process.pid}-${Date.now()}.sock`);
+		const servers = new Set<ReturnType<typeof createRuntimeIpcServer>>();
+		const socketServer = await listenRuntimeSocket(socketPath, (transport) => {
+			servers.add(createRuntimeIpcServer(runtimeHost, transport));
+		});
+		cleanups.push(async () => {
+			for (const server of servers) {
+				server.dispose();
+			}
+			await socketServer.close();
+		});
+
+		await runtimeHost.session.prompt("hello before clear");
+		await runtimeHost.session.agent.waitForIdle();
+		expect(runtimeHost.getSnapshot().transcript.entries.some((entry) => entry.type === "message")).toBe(true);
+
+		const result = await clearRuntimeEntries([
+			{
+				agentId: "backend",
+				socketPath,
+				pid: process.pid,
+				cwd: runtimeHost.getSnapshot().agent.cwd,
+				sessionId: runtimeHost.getSnapshot().session.sessionId,
+				status: "idle",
+				protocolVersion: 1,
+				capabilities: [],
+				createdAt: "2026-01-01T00:00:00.000Z",
+				updatedAt: "2026-01-01T00:00:00.000Z",
+			},
+			{
+				agentId: "missing",
+				socketPath: `${socketPath}.missing`,
+				pid: process.pid,
+				cwd: runtimeHost.getSnapshot().agent.cwd,
+				sessionId: runtimeHost.getSnapshot().session.sessionId,
+				status: "idle",
+				protocolVersion: 1,
+				capabilities: [],
+				createdAt: "2026-01-01T00:00:00.000Z",
+				updatedAt: "2026-01-01T00:00:00.000Z",
+			},
+		]);
+
+		expect(result.delivered).toEqual(["backend"]);
+		expect(result.failed.map((failure) => failure.agentId)).toEqual(["missing"]);
+		expect(runtimeHost.getSnapshot().transcript.entries.filter((entry) => entry.type === "message")).toHaveLength(0);
 	});
 
 	it("replays retained events and falls back to snapshot when the buffer is exceeded", async () => {

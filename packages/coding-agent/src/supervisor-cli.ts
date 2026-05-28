@@ -2,10 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import chalk from "chalk";
 import { APP_NAME, getAgentDir } from "./config.ts";
+import { loadTeamAgentCards } from "./core/a2a-agent-card.ts";
 import { listRuntimeRegistryEntries, readRuntimeRegistryEntry } from "./core/runtime-registry.ts";
-import { type RuntimeStartOptions, startRuntime } from "./runtime-cli.ts";
+import { type RuntimeStartOptions, startRuntime, stopRuntime } from "./runtime-cli.ts";
 
-interface RuntimeSpec {
+export interface RuntimeSpec {
 	id: string;
 	cwd?: string;
 	model?: string;
@@ -14,7 +15,7 @@ interface RuntimeSpec {
 	socketPath?: string;
 }
 
-interface SupervisorConfig {
+export interface SupervisorConfig {
 	runtimes: RuntimeSpec[];
 }
 
@@ -31,6 +32,9 @@ export async function handleSupervisorCommand(args: string[]): Promise<boolean> 
 		switch (command) {
 			case "start":
 				await startSupervisor(parseConfigPath(args.slice(2)));
+				return true;
+			case "restart":
+				await restartSupervisor(parseConfigPath(args.slice(2)));
 				return true;
 			case "status":
 			case "list":
@@ -60,13 +64,19 @@ export function loadSupervisorConfig(configPath = defaultSupervisorConfigPath())
 	return parsed;
 }
 
-export function runtimeSpecToStartOptions(spec: RuntimeSpec): RuntimeStartOptions {
+export function runtimeSpecToStartOptions(spec: RuntimeSpec, configPath?: string): RuntimeStartOptions {
 	const runtimeArgs = [...(spec.args ?? [])];
+	if (!hasSessionSelectionFlag(runtimeArgs)) {
+		runtimeArgs.push("--continue");
+	}
 	if (spec.model) {
 		runtimeArgs.push("--model", spec.model);
 	}
 	if (spec.tools && spec.tools.length > 0) {
 		runtimeArgs.push("--tools", spec.tools.join(","));
+	}
+	if (configPath) {
+		runtimeArgs.push("--team-config", configPath, "--team-member-name", spec.id);
 	}
 	return {
 		agentId: spec.id,
@@ -78,8 +88,42 @@ export function runtimeSpecToStartOptions(spec: RuntimeSpec): RuntimeStartOption
 
 async function startSupervisor(configPath: string): Promise<void> {
 	const config = loadSupervisorConfig(configPath);
+	validateSupervisorAgentCardNames(config);
 	for (const spec of config.runtimes) {
-		await startRuntime(runtimeSpecToStartOptions(spec));
+		await startRuntime(runtimeSpecToStartOptions(spec, configPath));
+	}
+}
+
+async function restartSupervisor(configPath: string): Promise<void> {
+	const config = loadSupervisorConfig(configPath);
+	validateSupervisorAgentCardNames(config);
+	for (const spec of config.runtimes) {
+		try {
+			await stopRuntime(getAgentDir(), spec.id);
+		} catch (error) {
+			console.log(
+				chalk.dim(
+					`Runtime "${spec.id}" was not stopped: ${error instanceof Error ? error.message : String(error)}`,
+				),
+			);
+		}
+	}
+	for (const spec of config.runtimes) {
+		await startRuntime(runtimeSpecToStartOptions(spec, configPath));
+	}
+}
+
+export function validateSupervisorAgentCardNames(config: SupervisorConfig, baseCwd = process.cwd()): void {
+	const cards = loadTeamAgentCards(config.runtimes, baseCwd);
+	for (let i = 0; i < config.runtimes.length; i++) {
+		const spec = config.runtimes[i];
+		const card = cards[i];
+		if (!spec || !card || card.name === spec.id) {
+			continue;
+		}
+		throw new Error(
+			`Invalid Agent Card for runtime "${spec.id}": frontmatter name must match runtime id, got "${card.name}"`,
+		);
 	}
 }
 
@@ -117,6 +161,7 @@ function printSupervisorHelp(): void {
 
 ${chalk.bold("Usage:")}
   ${APP_NAME} supervisor start [--config .pi/runtimes.json]
+  ${APP_NAME} supervisor restart [--config .pi/runtimes.json]
   ${APP_NAME} supervisor status [--config .pi/runtimes.json]
   ${APP_NAME} org start [--config .pi/runtimes.json]
 
@@ -125,7 +170,14 @@ ${chalk.bold("Config:")}
     "runtimes": [
       { "id": "backend", "cwd": "./backend", "model": "sonnet", "tools": ["read", "bash"] }
     ]
-  }`);
+  }
+
+Supervisor runtimes default to --continue so restart reattaches the most recent session.
+Set args to include --session, --resume, --continue, --fork, or --no-session to override session selection.`);
+}
+
+function hasSessionSelectionFlag(args: readonly string[]): boolean {
+	return args.some((arg) => ["--session", "--resume", "--continue", "-c", "--fork", "--no-session"].includes(arg));
 }
 
 function isSupervisorConfig(value: unknown): value is SupervisorConfig {

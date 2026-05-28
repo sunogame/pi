@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../src/core/agent-runtime-snapshot.ts";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
@@ -118,6 +119,117 @@ describe("RuntimeIpcServer", () => {
 		expect(onShutdown).toHaveBeenCalledTimes(1);
 		client.close();
 	});
+
+	it("serves new session and compact requests", async () => {
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle"));
+		createRuntimeIpcServer(runtime.host, serverTransport);
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		await expect(client.newSession()).resolves.toEqual({ cancelled: false });
+		expect(runtime.newSession).toHaveBeenCalledTimes(1);
+
+		await expect(client.compact("keep decisions")).resolves.toEqual({ summary: "compacted" });
+		expect(runtime.compact).toHaveBeenCalledWith("keep decisions");
+		client.close();
+	});
+
+	it("serves local A2A message/send and tasks/get", async () => {
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle"));
+		runtime.prompt.mockImplementation(async () => {
+			runtime.currentSnapshot = snapshot(2, "idle", {
+				entries: [
+					{
+						id: "assistant-1",
+						parentId: null,
+						type: "message",
+						timestamp: new Date().toISOString(),
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "backend answer" }],
+						} as unknown as AgentMessage,
+					},
+				],
+			});
+		});
+		createRuntimeIpcServer(runtime.host, serverTransport);
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		const task = await client.a2aSendMessage({
+			message: {
+				kind: "message",
+				messageId: "msg-1",
+				role: "user",
+				parts: [{ kind: "text", text: "hello" }],
+			},
+			configuration: { blocking: true },
+		});
+
+		expect(task.status.state).toBe("completed");
+		expect(task.artifacts?.[0]?.parts[0]).toEqual({ kind: "text", text: "backend answer" });
+		await expect(client.a2aGetTask({ id: task.id })).resolves.toMatchObject({
+			id: task.id,
+			status: { state: "completed" },
+		});
+		client.close();
+	});
+
+	it("queues local A2A tasks and cancels submitted tasks without aborting the active prompt", async () => {
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle"));
+		let releasePrompt: (() => void) | undefined;
+		runtime.prompt.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					releasePrompt = resolve;
+				}),
+		);
+		createRuntimeIpcServer(runtime.host, serverTransport);
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		const first = await client.a2aSendMessage({
+			message: {
+				kind: "message",
+				messageId: "msg-1",
+				role: "user",
+				parts: [{ kind: "text", text: "first" }],
+			},
+			configuration: { blocking: false },
+		});
+		const second = await client.a2aSendMessage({
+			message: {
+				kind: "message",
+				messageId: "msg-2",
+				role: "user",
+				parts: [{ kind: "text", text: "second" }],
+			},
+			configuration: { blocking: false },
+		});
+
+		await tick();
+		expect(runtime.prompt).toHaveBeenCalledTimes(1);
+		await expect(client.a2aGetTask({ id: first.id })).resolves.toMatchObject({ status: { state: "working" } });
+		await expect(client.a2aGetTask({ id: second.id })).resolves.toMatchObject({ status: { state: "submitted" } });
+
+		const canceled = await client.a2aCancelTask({ id: second.id });
+		expect(canceled.status.state).toBe("canceled");
+		expect(runtime.abort).not.toHaveBeenCalled();
+
+		releasePrompt?.();
+		await tick();
+		client.close();
+	});
+
+	it("returns an IPC error for unknown local A2A tasks", async () => {
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle"));
+		createRuntimeIpcServer(runtime.host, serverTransport);
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		await expect(client.a2aGetTask({ id: "missing" })).rejects.toThrow("Task not found: missing");
+		client.close();
+	});
 });
 
 function createTransportPair(): {
@@ -136,6 +248,9 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 	attachRuntime: ReturnType<typeof vi.fn>;
 	prompt: ReturnType<typeof vi.fn>;
 	executeExtensionCommand: ReturnType<typeof vi.fn>;
+	newSession: ReturnType<typeof vi.fn>;
+	compact: ReturnType<typeof vi.fn>;
+	abort: ReturnType<typeof vi.fn>;
 	currentSnapshot: AgentRuntimeSnapshot;
 	listener?: (event: AgentRuntimeEvent) => void;
 } {
@@ -154,23 +269,31 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 			};
 		}),
 		prompt: vi.fn(async () => {}),
+		abort: vi.fn(async () => {}),
 		executeExtensionCommand: vi.fn(async () => true),
+		newSession: vi.fn(async () => ({ cancelled: false })),
+		compact: vi.fn(async () => ({ summary: "compacted" })),
 	};
 
 	return {
 		host: {
 			getSnapshot: () => fake.currentSnapshot,
 			attachRuntime: fake.attachRuntime,
+			newSession: fake.newSession,
 			session: {
 				prompt: fake.prompt,
-				abort: vi.fn(async () => {}),
+				abort: fake.abort,
+				compact: fake.compact,
 				agent: { waitForIdle: vi.fn(async () => {}) },
 				executeExtensionCommand: fake.executeExtensionCommand,
 			},
 		} as unknown as AgentSessionRuntime,
 		attachRuntime: fake.attachRuntime,
 		prompt: fake.prompt,
+		abort: fake.abort,
 		executeExtensionCommand: fake.executeExtensionCommand,
+		newSession: fake.newSession,
+		compact: fake.compact,
 		get currentSnapshot() {
 			return fake.currentSnapshot;
 		},
@@ -186,7 +309,7 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 function snapshot(
 	eventCursor: number,
 	status: AgentRuntimeSnapshot["agent"]["status"],
-	options: { sessionName?: string } = {},
+	options: { sessionName?: string; entries?: AgentRuntimeSnapshot["transcript"]["entries"] } = {},
 ): AgentRuntimeSnapshot {
 	return {
 		protocolVersion: 1,
@@ -206,7 +329,7 @@ function snapshot(
 			currentLeafId: null,
 		},
 		transcript: {
-			entries: [],
+			entries: options.entries ?? [],
 			currentLeafId: null,
 		},
 		run: {

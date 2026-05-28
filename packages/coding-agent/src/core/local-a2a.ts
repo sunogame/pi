@@ -1,0 +1,310 @@
+import { randomUUID } from "node:crypto";
+import { type Static, Type } from "typebox";
+import { getAgentDir } from "../config.ts";
+import {
+	formatRelativeCardPath,
+	loadTeamAgentCards,
+	type PiA2AAgentCard,
+	type TeamRuntimeCardSpec,
+} from "./a2a-agent-card.ts";
+import type { AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
+import type { AgentToolResult } from "./extensions/index.ts";
+import { defineTool, type ToolDefinition } from "./extensions/types.ts";
+import { createIpcRuntimeClient } from "./ipc-runtime-client.ts";
+import { listRuntimeRegistryEntries, type RuntimeRegistryEntry, readRuntimeRegistryEntry } from "./runtime-registry.ts";
+import { connectRuntimeSocket } from "./runtime-socket-transport.ts";
+
+export type A2ATaskState =
+	| "submitted"
+	| "working"
+	| "input-required"
+	| "completed"
+	| "canceled"
+	| "failed"
+	| "rejected"
+	| "auth-required"
+	| "unknown";
+
+export interface A2ATextPart {
+	kind: "text";
+	text: string;
+	metadata?: Record<string, unknown>;
+}
+
+export type A2APart = A2ATextPart;
+
+export interface A2AMessage {
+	kind: "message";
+	messageId: string;
+	role: "user" | "agent";
+	parts: A2APart[];
+	taskId?: string;
+	contextId?: string;
+	metadata?: Record<string, unknown>;
+}
+
+export interface A2AArtifact {
+	artifactId: string;
+	name?: string;
+	description?: string;
+	parts: A2APart[];
+	metadata?: Record<string, unknown>;
+}
+
+export interface A2ATaskStatus {
+	state: A2ATaskState;
+	message?: A2AMessage;
+	timestamp?: string;
+}
+
+export interface A2ATask {
+	kind: "task";
+	id: string;
+	contextId: string;
+	status: A2ATaskStatus;
+	artifacts?: A2AArtifact[];
+	history?: A2AMessage[];
+	metadata?: Record<string, unknown>;
+}
+
+export interface A2AMessageSendParams {
+	to?: string;
+	message: A2AMessage;
+	configuration?: {
+		blocking?: boolean;
+		acceptedOutputModes?: string[];
+		timeoutMs?: number;
+	};
+	metadata?: Record<string, unknown>;
+}
+
+export interface A2ATaskQueryParams {
+	id: string;
+	historyLength?: number;
+	metadata?: Record<string, unknown>;
+}
+
+export interface A2ATaskIdParams {
+	id: string;
+	metadata?: Record<string, unknown>;
+}
+
+export interface LocalA2AToolsOptions {
+	agentDir?: string;
+	selfName?: string;
+	teamSpecs: TeamRuntimeCardSpec[];
+	configBaseCwd?: string;
+}
+
+const listAgentCardsSchema = Type.Object({});
+const sendMessageSchema = Type.Object({
+	to: Type.String({ description: "Target peer agent name from the Agent Cards." }),
+	text: Type.String({
+		description: "Text message to send to the peer agent.",
+		minLength: 1,
+		maxLength: 65536,
+	}),
+	contextId: Type.Optional(Type.String({ description: "Optional A2A contextId for continuing related work." })),
+	taskId: Type.Optional(Type.String({ description: "Optional A2A taskId when adding input to an existing task." })),
+	blocking: Type.Optional(Type.Boolean({ description: "Wait until the peer finishes this turn. Defaults to false." })),
+	timeoutMs: Type.Optional(
+		Type.Number({ description: "Maximum time to wait when blocking is true. Defaults to 300000." }),
+	),
+});
+const getTaskSchema = Type.Object({
+	agent: Type.String({ description: "Peer agent name that owns the task." }),
+	taskId: Type.String({ description: "A2A task id returned by a2a_send_message." }),
+	historyLength: Type.Optional(Type.Number({ description: "Optional number of recent history messages to return." })),
+});
+const cancelTaskSchema = Type.Object({
+	agent: Type.String({ description: "Peer agent name that owns the task." }),
+	taskId: Type.String({ description: "A2A task id to cancel." }),
+});
+
+export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): ToolDefinition[] {
+	const agentDir = options.agentDir ?? getAgentDir();
+	const getCards = () => loadTeamAgentCards(options.teamSpecs, options.configBaseCwd);
+
+	return [
+		defineTool({
+			name: "a2a_list_agent_cards",
+			label: "A2A list agents",
+			description: "List A2A-style Agent Cards for peer agents in the local pi runtime team.",
+			promptSnippet: "a2a_list_agent_cards: list peer Agent Cards for local A2A routing.",
+			parameters: listAgentCardsSchema,
+			async execute(): Promise<AgentToolResult<{ cards: PiA2AAgentCard[] }>> {
+				const cards = getCards();
+				return textResult(JSON.stringify({ agents: cards.map(toPublicCard) }, null, 2), { cards });
+			},
+		}),
+		defineTool({
+			name: "a2a_send_message",
+			label: "A2A send message",
+			description:
+				"Send an A2A-style text message to a peer local runtime. Returns an A2A Task owned by the target agent.",
+			promptSnippet: "a2a_send_message: send a message to a peer agent; returns an A2A Task.",
+			promptGuidelines: [
+				"Use a2a_send_message only when a peer Agent Card indicates it is a better fit for a focused question or task.",
+				"Peer agents are opaque and do not share your private memory; include the necessary context in the message.",
+				"If a2a_send_message returns a non-terminal Task, use a2a_get_task with the peer name and task id to check progress.",
+			],
+			parameters: sendMessageSchema,
+			executionMode: "sequential",
+			async execute(
+				_toolCallId,
+				params: Static<typeof sendMessageSchema>,
+			): Promise<AgentToolResult<{ task: A2ATask }>> {
+				const task = await sendA2AMessage(agentDir, options.selfName, params.to, {
+					message: {
+						kind: "message",
+						messageId: randomUUID(),
+						role: "user",
+						parts: [{ kind: "text", text: params.text }],
+						taskId: params.taskId,
+						contextId: params.contextId,
+					},
+					configuration: {
+						blocking: params.blocking ?? false,
+						acceptedOutputModes: ["text/plain"],
+						timeoutMs: params.timeoutMs,
+					},
+					metadata: options.selfName ? { from: options.selfName } : undefined,
+				});
+				return textResult(JSON.stringify(task, null, 2), { task });
+			},
+		}),
+		defineTool({
+			name: "a2a_get_task",
+			label: "A2A get task",
+			description: "Fetch an A2A Task from the peer agent runtime that owns it.",
+			promptSnippet: "a2a_get_task: fetch status and results for a peer-owned A2A Task.",
+			parameters: getTaskSchema,
+			executionMode: "sequential",
+			async execute(_toolCallId, params: Static<typeof getTaskSchema>): Promise<AgentToolResult<{ task: A2ATask }>> {
+				const task = await getA2ATask(agentDir, params.agent, {
+					id: params.taskId,
+					historyLength: params.historyLength,
+				});
+				return textResult(JSON.stringify(task, null, 2), { task });
+			},
+		}),
+		defineTool({
+			name: "a2a_cancel_task",
+			label: "A2A cancel task",
+			description: "Request cancellation of an A2A Task owned by a peer agent runtime.",
+			promptSnippet: "a2a_cancel_task: cancel a peer-owned A2A Task when it is no longer needed.",
+			parameters: cancelTaskSchema,
+			executionMode: "sequential",
+			async execute(
+				_toolCallId,
+				params: Static<typeof cancelTaskSchema>,
+			): Promise<AgentToolResult<{ task: A2ATask }>> {
+				const task = await cancelA2ATask(agentDir, params.agent, { id: params.taskId });
+				return textResult(JSON.stringify(task, null, 2), { task });
+			},
+		}),
+	];
+}
+
+async function sendA2AMessage(
+	agentDir: string,
+	selfName: string | undefined,
+	to: string,
+	params: Omit<A2AMessageSendParams, "to">,
+): Promise<A2ATask> {
+	if (selfName && to === selfName) {
+		throw new Error(`Refusing to send local A2A message from ${selfName} to itself`);
+	}
+	const client = await connectA2AClient(agentDir, to);
+	try {
+		return await client.a2aSendMessage(params);
+	} finally {
+		client.close();
+	}
+}
+
+async function getA2ATask(agentDir: string, agent: string, params: A2ATaskQueryParams): Promise<A2ATask> {
+	const client = await connectA2AClient(agentDir, agent);
+	try {
+		return await client.a2aGetTask(params);
+	} finally {
+		client.close();
+	}
+}
+
+async function cancelA2ATask(agentDir: string, agent: string, params: A2ATaskIdParams): Promise<A2ATask> {
+	const client = await connectA2AClient(agentDir, agent);
+	try {
+		return await client.a2aCancelTask(params);
+	} finally {
+		client.close();
+	}
+}
+
+async function connectA2AClient(agentDir: string, agent: string) {
+	const entry = readRuntimeRegistryEntry(agentDir, agent);
+	if (!entry) {
+		throw new Error(`No live runtime registered as "${agent}"`);
+	}
+	const transport = await connectRuntimeSocket(entry.socketPath);
+	return createIpcRuntimeClient(transport, createPlaceholderSnapshot(entry));
+}
+
+function toPublicCard(card: PiA2AAgentCard): Record<string, unknown> {
+	return {
+		name: card.name,
+		description: card.description,
+		version: card.version,
+		capabilities: card.capabilities,
+		defaultInputModes: card.defaultInputModes,
+		defaultOutputModes: card.defaultOutputModes,
+		cardPath: formatRelativeCardPath(card),
+		live: listRuntimeRegistryEntries(getAgentDir()).some((entry) => entry.agentId === card.name),
+	};
+}
+
+function textResult<T>(text: string, details: T): AgentToolResult<T> {
+	return { content: [{ type: "text", text }], details };
+}
+
+function createPlaceholderSnapshot(entry: RuntimeRegistryEntry): AgentRuntimeSnapshot {
+	return {
+		protocolVersion: 1,
+		capabilities: entry.capabilities,
+		eventCursor: 0,
+		agent: {
+			agentId: entry.agentId,
+			cwd: entry.cwd,
+			model: {},
+			thinkingLevel: "off",
+			status: entry.status,
+		},
+		session: {
+			sessionId: entry.sessionId,
+			sessionName: entry.sessionName,
+			sessionDir: "",
+			currentLeafId: null,
+		},
+		transcript: { entries: [], currentLeafId: null },
+		run: {
+			isStreaming: false,
+			isBashRunning: false,
+			retryAttempt: 0,
+			pendingUserMessages: [],
+			pendingApprovals: [],
+			activeToolExecutions: [],
+		},
+		tools: { active: [], available: [] },
+		resources: { skills: [], promptTemplates: [], themes: [], extensions: [], agentsFiles: [] },
+		modelRegistry: { available: [] },
+		diagnostics: { resources: [], extensions: [] },
+		config: {
+			autoCompaction: false,
+			steeringMode: "all",
+			followUpMode: "all",
+			availableThinkingLevels: [],
+			scopedModels: [],
+		},
+		commands: [],
+	};
+}

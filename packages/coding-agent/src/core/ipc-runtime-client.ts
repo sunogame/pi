@@ -1,7 +1,13 @@
 import type { AgentRuntimeAttachResult, AgentRuntimeEvent, AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
 import type { PromptOptions } from "./agent-session.ts";
 import { serializeJsonLine } from "./jsonl.ts";
-import { AgentRuntimeStore, type RuntimeClient, type RuntimeClientAttachOptions } from "./runtime-client.ts";
+import type { A2AMessageSendParams, A2ATask, A2ATaskIdParams, A2ATaskQueryParams } from "./local-a2a.ts";
+import {
+	AgentRuntimeStore,
+	type RuntimeClient,
+	type RuntimeClientAttachOptions,
+	type RuntimeCompactionResult,
+} from "./runtime-client.ts";
 import {
 	RuntimeIpcErrorResponse,
 	type RuntimeIpcMethod,
@@ -83,8 +89,32 @@ export class IpcRuntimeClient implements RuntimeClient {
 		return result.handled;
 	}
 
+	async newSession(): Promise<{ cancelled: boolean }> {
+		return await this.request("newSession", undefined);
+	}
+
+	async compact(customInstructions?: string): Promise<RuntimeCompactionResult> {
+		const result = await this.request("compact", { customInstructions });
+		return result.result as RuntimeCompactionResult;
+	}
+
 	async shutdown(): Promise<void> {
 		await this.request("shutdown", undefined);
+	}
+
+	async a2aSendMessage(params: Omit<A2AMessageSendParams, "to">): Promise<A2ATask> {
+		const result = await this.request("a2a/message/send", params);
+		return result.task;
+	}
+
+	async a2aGetTask(params: A2ATaskQueryParams): Promise<A2ATask> {
+		const result = await this.request("a2a/tasks/get", params);
+		return result.task;
+	}
+
+	async a2aCancelTask(params: A2ATaskIdParams): Promise<A2ATask> {
+		const result = await this.request("a2a/tasks/cancel", params);
+		return result.task;
 	}
 
 	close(): void {

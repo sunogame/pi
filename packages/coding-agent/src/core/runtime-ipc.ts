@@ -1,5 +1,6 @@
 import type { AgentRuntimeAttachResult, AgentRuntimeEvent, AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
 import type { PromptOptions } from "./agent-session.ts";
+import type { A2AMessageSendParams, A2ATask, A2ATaskIdParams, A2ATaskQueryParams } from "./local-a2a.ts";
 
 export type RuntimeIpcMethod =
 	| "attach"
@@ -8,8 +9,13 @@ export type RuntimeIpcMethod =
 	| "abort"
 	| "waitForIdle"
 	| "executeCommand"
+	| "newSession"
+	| "compact"
 	| "getSnapshot"
-	| "shutdown";
+	| "shutdown"
+	| "a2a/message/send"
+	| "a2a/tasks/get"
+	| "a2a/tasks/cancel";
 
 export type RuntimeIpcAttachResult = Omit<AgentRuntimeAttachResult, "unsubscribe">;
 
@@ -20,8 +26,13 @@ export type RuntimeIpcRequestParams = {
 	abort: undefined;
 	waitForIdle: undefined;
 	executeCommand: { name: string; args: string };
+	newSession: undefined;
+	compact: { customInstructions?: string };
 	getSnapshot: undefined;
 	shutdown: undefined;
+	"a2a/message/send": A2AMessageSendParams;
+	"a2a/tasks/get": A2ATaskQueryParams;
+	"a2a/tasks/cancel": A2ATaskIdParams;
 };
 
 export type RuntimeIpcResult = {
@@ -31,8 +42,13 @@ export type RuntimeIpcResult = {
 	abort: Record<string, never>;
 	waitForIdle: Record<string, never>;
 	executeCommand: { handled: boolean };
+	newSession: { cancelled: boolean };
+	compact: { result: unknown };
 	getSnapshot: { snapshot: AgentRuntimeSnapshot };
 	shutdown: Record<string, never>;
+	"a2a/message/send": { task: A2ATask };
+	"a2a/tasks/get": { task: A2ATask };
+	"a2a/tasks/cancel": { task: A2ATask };
 };
 
 export type RuntimeIpcRequest<M extends RuntimeIpcMethod = RuntimeIpcMethod> = {

@@ -54,10 +54,15 @@ export interface RuntimeBroadcastResult {
 	failed: Array<{ agentId: string; error: string }>;
 }
 
+export type RuntimeBulkCommandResult = RuntimeBroadcastResult;
+
 export const ATTACH_LOCAL_COMMANDS: SlashCommand[] = [
 	{ name: "attach", description: "Attach to a registered runtime" },
 	{ name: "runtimes", description: "List registered runtimes" },
 	{ name: "broadcast", description: "Send a prompt to all registered runtimes" },
+	{ name: "clear", description: "Start a new session for the attached runtime" },
+	{ name: "clear-all", description: "Start a new session for all registered runtimes" },
+	{ name: "compact", description: "Compact the attached runtime context" },
 	{ name: "abort", description: "Abort the current runtime run" },
 	{ name: "exit", description: "Detach this TUI" },
 	{ name: "quit", description: "Detach this TUI" },
@@ -321,6 +326,18 @@ class RuntimeAttachView {
 			await this.broadcast(command.args.trim());
 			return true;
 		}
+		if (command.name === "clear") {
+			await this.clearRuntime();
+			return true;
+		}
+		if (command.name === "clear-all") {
+			await this.clearAllRuntimes();
+			return true;
+		}
+		if (command.name === "compact") {
+			await this.compactRuntime(command.args.trim());
+			return true;
+		}
 		return false;
 	}
 
@@ -349,6 +366,53 @@ class RuntimeAttachView {
 		this.showStatusMessage(
 			result.failed.length > 0 ? theme.fg("warning", parts.join("  ")) : theme.fg("accent", parts.join("  ")),
 		);
+	}
+
+	private async clearRuntime(): Promise<void> {
+		this.lastError = undefined;
+		try {
+			const result = await this.client.newSession();
+			if (result.cancelled) {
+				this.showStatusMessage(theme.fg("warning", "Clear cancelled."));
+				return;
+			}
+			this.showStatusMessage(theme.fg("accent", `cleared ${this.client.store.snapshot.agent.agentId}`));
+		} catch (error) {
+			this.setError(error);
+		}
+	}
+
+	private async clearAllRuntimes(): Promise<void> {
+		if (!this.agentDir) {
+			this.showStatusMessage(theme.fg("warning", "Runtime registry is unavailable in this attach session."));
+			return;
+		}
+		const entries = listRuntimeRegistryEntries(this.agentDir);
+		if (entries.length === 0) {
+			this.showStatusMessage(theme.fg("muted", "No registered runtimes."));
+			return;
+		}
+		const result = await clearRuntimeEntries(entries);
+		const parts = [`clear-all delivered ${result.delivered.length}/${entries.length}`];
+		if (result.delivered.length > 0) {
+			parts.push(`ok: ${result.delivered.join(",")}`);
+		}
+		if (result.failed.length > 0) {
+			parts.push(`failed: ${result.failed.map((failure) => failure.agentId).join(",")}`);
+		}
+		this.showStatusMessage(
+			result.failed.length > 0 ? theme.fg("warning", parts.join("  ")) : theme.fg("accent", parts.join("  ")),
+		);
+	}
+
+	private async compactRuntime(customInstructions: string): Promise<void> {
+		this.lastError = undefined;
+		try {
+			await this.client.compact(customInstructions.length > 0 ? customInstructions : undefined);
+			this.showStatusMessage(theme.fg("accent", `compacted ${this.client.store.snapshot.agent.agentId}`));
+		} catch (error) {
+			this.setError(error);
+		}
 	}
 
 	private async switchRuntime(runtimeId: string): Promise<void> {
@@ -472,7 +536,7 @@ class RuntimeAttachView {
 		this.renderRuntimeStatus(snapshot, statusParts.join("  "));
 		this.help.setText(
 			chalk.dim(
-				"Enter sends prompt. Esc aborts. Alt+Right/Left cycles runtimes. /attach <id> switches. /runtimes lists. /exit quits.",
+				"Enter sends prompt. Esc aborts. Alt+Right/Left cycles runtimes. /clear starts a new session. /compact compacts. /exit quits.",
 			),
 		);
 		this.tui.requestRender();
@@ -906,6 +970,36 @@ export async function broadcastToRuntimeEntries(
 				client = createIpcRuntimeClient(transport, createPlaceholderSnapshot(entry.cwd));
 				await client.prompt(message);
 				delivered.push(entry.agentId);
+			} catch (error) {
+				failed.push({
+					agentId: entry.agentId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			} finally {
+				client?.close();
+			}
+		}),
+	);
+	delivered.sort((a, b) => a.localeCompare(b));
+	failed.sort((a, b) => a.agentId.localeCompare(b.agentId));
+	return { delivered, failed };
+}
+
+export async function clearRuntimeEntries(entries: readonly RuntimeRegistryEntry[]): Promise<RuntimeBulkCommandResult> {
+	const delivered: string[] = [];
+	const failed: Array<{ agentId: string; error: string }> = [];
+	await Promise.all(
+		entries.map(async (entry) => {
+			let client: IpcRuntimeClient | undefined;
+			try {
+				const transport = await connectRuntimeSocket(entry.socketPath);
+				client = createIpcRuntimeClient(transport, createPlaceholderSnapshot(entry.cwd));
+				const result = await client.newSession();
+				if (result.cancelled) {
+					failed.push({ agentId: entry.agentId, error: "clear cancelled" });
+				} else {
+					delivered.push(entry.agentId);
+				}
 			} catch (error) {
 				failed.push({
 					agentId: entry.agentId,

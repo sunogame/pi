@@ -128,7 +128,7 @@ async function inspectRuntime(agentDir: string, agentId?: string): Promise<void>
 	console.log(JSON.stringify({ registry: entry, snapshot }, null, 2));
 }
 
-async function stopRuntime(agentDir: string, agentId?: string): Promise<void> {
+export async function stopRuntime(agentDir: string, agentId?: string): Promise<void> {
 	if (!agentId) {
 		throw new Error("Missing runtime id. Usage: pi runtime stop <id>");
 	}
