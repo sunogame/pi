@@ -236,6 +236,7 @@ export class FooterComponent implements Component {
 export class RuntimeFooterComponent implements Component {
 	private snapshot: AgentRuntimeSnapshot;
 	private footerData: ReadonlyFooterDataProvider;
+	private runtimeStatuses: Array<{ agentId: string; status: AgentRuntimeSnapshot["agent"]["status"] }> = [];
 
 	constructor(snapshot: AgentRuntimeSnapshot, footerData: ReadonlyFooterDataProvider) {
 		this.snapshot = snapshot;
@@ -244,6 +245,10 @@ export class RuntimeFooterComponent implements Component {
 
 	setSnapshot(snapshot: AgentRuntimeSnapshot): void {
 		this.snapshot = snapshot;
+	}
+
+	setRuntimeStatuses(statuses: Array<{ agentId: string; status: AgentRuntimeSnapshot["agent"]["status"] }>): void {
+		this.runtimeStatuses = statuses;
 	}
 
 	invalidate(): void {
@@ -263,6 +268,10 @@ export class RuntimeFooterComponent implements Component {
 		}
 		if (this.snapshot.session.sessionName) {
 			pwd = `${pwd} • ${this.snapshot.session.sessionName}`;
+		}
+		const runtimeStatusText = this.formatRuntimeStatuses();
+		if (runtimeStatusText) {
+			pwd = `${pwd} • ${runtimeStatusText}`;
 		}
 
 		const statsParts = [];
@@ -316,6 +325,21 @@ export class RuntimeFooterComponent implements Component {
 		}
 
 		return lines;
+	}
+
+	private formatRuntimeStatuses(): string {
+		if (this.runtimeStatuses.length === 0) {
+			return "";
+		}
+		return this.runtimeStatuses
+			.map((runtime) => {
+				const label = `${runtime.agentId}:${runtime.status}`;
+				if (runtime.agentId === this.snapshot.agent.agentId) {
+					return theme.bold(theme.fg("accent", `[${label}]`));
+				}
+				return theme.fg("dim", label);
+			})
+			.join(theme.fg("muted", "  "));
 	}
 }
 

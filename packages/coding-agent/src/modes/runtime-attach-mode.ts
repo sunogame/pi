@@ -148,7 +148,6 @@ class RuntimeAttachView {
 	private readonly agentDir?: string;
 	private readonly root = new Container();
 	private readonly header = new RuntimeAttachHeader();
-	private readonly runtimeBar = new Text("", 1, 0);
 	private readonly statusContainer = new Container();
 	private readonly transcript: RuntimeTranscriptView;
 	private readonly pendingMessages = new RuntimePendingMessagesView();
@@ -225,7 +224,6 @@ class RuntimeAttachView {
 		});
 
 		this.root.addChild(this.header);
-		this.root.addChild(this.runtimeBar);
 		this.root.addChild(this.statusContainer);
 		this.root.addChild(this.transcript);
 		this.root.addChild(this.pendingMessages);
@@ -567,7 +565,7 @@ class RuntimeAttachView {
 	private renderStatus(snapshot: AgentRuntimeSnapshot): void {
 		this.updateTerminalTitle(snapshot);
 		this.header.renderSnapshot(snapshot);
-		this.renderRuntimeBar(snapshot);
+		this.footer.setRuntimeStatuses(this.getRuntimeStatuses(snapshot));
 		this.footerDataProvider.setCwd(snapshot.agent.cwd);
 		this.footer.setSnapshot(snapshot);
 		this.pendingMessages.renderSnapshot(snapshot);
@@ -591,25 +589,21 @@ class RuntimeAttachView {
 		this.tui.requestRender();
 	}
 
-	private renderRuntimeBar(snapshot: AgentRuntimeSnapshot): void {
+	private getRuntimeStatuses(snapshot: AgentRuntimeSnapshot): Array<{
+		agentId: string;
+		status: AgentRuntimeSnapshot["agent"]["status"];
+	}> {
 		if (!this.agentDir) {
-			this.runtimeBar.setText("");
-			return;
+			return [];
 		}
 		const entries = listRuntimeRegistryEntries(this.agentDir);
 		if (entries.length === 0) {
-			this.runtimeBar.setText(theme.fg("dim", "No registered runtimes."));
-			return;
+			return [];
 		}
-		this.runtimeBar.setText(
-			entries
-				.map((entry) => {
-					const active = entry.agentId === snapshot.agent.agentId;
-					const label = `${entry.agentId}:${entry.status}`;
-					return active ? theme.bold(theme.fg("accent", `[${label}]`)) : theme.fg("dim", label);
-				})
-				.join(theme.fg("muted", "  ")),
-		);
+		return entries.map((entry) => ({
+			agentId: entry.agentId,
+			status: entry.agentId === snapshot.agent.agentId ? snapshot.agent.status : entry.status,
+		}));
 	}
 
 	private updateTerminalTitle(snapshot: AgentRuntimeSnapshot): void {
