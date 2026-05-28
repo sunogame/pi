@@ -63,6 +63,8 @@ export const ATTACH_LOCAL_COMMANDS: SlashCommand[] = [
 	{ name: "clear", description: "Start a new session for the attached runtime" },
 	{ name: "clear-all", description: "Start a new session for all registered runtimes" },
 	{ name: "compact", description: "Compact the attached runtime context" },
+	{ name: "monitors", description: "List monitors for the attached runtime" },
+	{ name: "monitor-stop", description: "Stop a monitor by id" },
 	{ name: "abort", description: "Abort the current runtime run" },
 	{ name: "exit", description: "Detach this TUI" },
 	{ name: "quit", description: "Detach this TUI" },
@@ -338,6 +340,14 @@ class RuntimeAttachView {
 			await this.compactRuntime(command.args.trim());
 			return true;
 		}
+		if (command.name === "monitors") {
+			this.showMonitors();
+			return true;
+		}
+		if (command.name === "monitor-stop") {
+			await this.stopMonitor(command.args.trim());
+			return true;
+		}
 		return false;
 	}
 
@@ -410,6 +420,38 @@ class RuntimeAttachView {
 		try {
 			await this.client.compact(customInstructions.length > 0 ? customInstructions : undefined);
 			this.showStatusMessage(theme.fg("accent", `compacted ${this.client.store.snapshot.agent.agentId}`));
+		} catch (error) {
+			this.setError(error);
+		}
+	}
+
+	private showMonitors(): void {
+		const { active, recent } = this.client.store.snapshot.monitors;
+		if (active.length === 0 && recent.length === 0) {
+			this.showStatusMessage(theme.fg("muted", "No monitors."));
+			return;
+		}
+		const activeLines = active.map(
+			(monitor) =>
+				`${monitor.id}:running "${monitor.description}" lines=${monitor.lineCount} notifications=${monitor.notificationCount}`,
+		);
+		const recentLines = recent.slice(0, 5).map((monitor) => {
+			const suffix = monitor.error ? ` error=${monitor.error}` : "";
+			return `${monitor.id}:${monitor.status} "${monitor.description}" lines=${monitor.lineCount}${suffix}`;
+		});
+		this.showStatusMessage([...activeLines, ...recentLines].join("\n"));
+	}
+
+	private async stopMonitor(id: string): Promise<void> {
+		if (!id) {
+			this.showStatusMessage(theme.fg("warning", "Usage: /monitor-stop <monitor-id>"));
+			return;
+		}
+		try {
+			const stopped = await this.client.stopMonitor(id);
+			this.showStatusMessage(
+				stopped ? theme.fg("accent", `stopped monitor ${id}`) : theme.fg("warning", `No active monitor ${id}`),
+			);
 		} catch (error) {
 			this.setError(error);
 		}
@@ -924,8 +966,13 @@ function createPlaceholderSnapshot(cwd: string): AgentRuntimeSnapshot {
 			isBashRunning: false,
 			retryAttempt: 0,
 			pendingUserMessages: [],
+			pendingNotifications: [],
 			pendingApprovals: [],
 			activeToolExecutions: [],
+		},
+		monitors: {
+			active: [],
+			recent: [],
 		},
 		tools: {
 			active: [],

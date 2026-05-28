@@ -29,7 +29,11 @@ describe("Agent runtime snapshot", () => {
 		mkdirSync(tempDir, { recursive: true });
 
 		const faux = registerFauxProvider();
-		faux.setResponses([fauxAssistantMessage("hello from runtime")]);
+		faux.setResponses([
+			fauxAssistantMessage("hello from runtime"),
+			fauxAssistantMessage("monitor event observed"),
+			fauxAssistantMessage("monitor completed observed"),
+		]);
 
 		const authStorage = AuthStorage.inMemory();
 		authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
@@ -300,4 +304,62 @@ describe("Agent runtime snapshot", () => {
 		}
 		expect(messageCount).toBe(2);
 	});
+
+	it("projects monitor events and runtime notifications", async () => {
+		const { runtimeHost } = await createRuntimeHost();
+		const client = createInProcessRuntimeClient(runtimeHost);
+		const events: AgentRuntimeEvent[] = [];
+		client.store.subscribe((_snapshot, event) => {
+			if (event) {
+				events.push(event);
+			}
+		});
+		await client.attach();
+
+		const monitorTool = runtimeHost.session.getToolDefinition("monitor");
+		expect(monitorTool).toBeDefined();
+		await monitorTool?.execute(
+			"monitor-call",
+			{
+				command: "printf 'alpha\\nbeta\\n'",
+				description: "test monitor",
+				timeoutSeconds: 2,
+			},
+			undefined,
+			undefined,
+			{} as never,
+		);
+
+		await waitFor(() =>
+			client.store.snapshot.monitors.recent.some((monitor) => monitor.description === "test monitor"),
+		);
+		await waitFor(() => client.store.snapshot.run.pendingNotifications.length === 0);
+		await waitFor(() =>
+			client.store.snapshot.transcript.entries.some(
+				(entry) => entry.type === "custom_message" && entry.customType === "monitor-notification",
+			),
+		);
+
+		expect(events.map((event) => event.type)).toContain("monitor_started");
+		expect(events.map((event) => event.type)).toContain("monitor_output");
+		expect(events.map((event) => event.type)).toContain("monitor_ended");
+		expect(events.map((event) => event.type)).toContain("notification_queued");
+		expect(events.map((event) => event.type)).toContain("notification_delivered");
+		expect(client.store.snapshot.monitors.recent[0]?.lineCount).toBe(2);
+		expect(
+			client.store.snapshot.transcript.entries.some(
+				(entry) => entry.type === "custom_message" && entry.customType === "monitor-notification",
+			),
+		).toBe(true);
+	});
 });
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+	const start = Date.now();
+	while (!predicate()) {
+		if (Date.now() - start > timeoutMs) {
+			throw new Error("Timed out waiting for condition");
+		}
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+}

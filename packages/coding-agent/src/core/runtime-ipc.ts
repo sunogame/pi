@@ -11,6 +11,7 @@ export type RuntimeIpcMethod =
 	| "executeCommand"
 	| "newSession"
 	| "compact"
+	| "stopMonitor"
 	| "getSnapshot"
 	| "shutdown"
 	| "a2a/message/send"
@@ -28,6 +29,7 @@ export type RuntimeIpcRequestParams = {
 	executeCommand: { name: string; args: string };
 	newSession: undefined;
 	compact: { customInstructions?: string };
+	stopMonitor: { id: string };
 	getSnapshot: undefined;
 	shutdown: undefined;
 	"a2a/message/send": A2AMessageSendParams;
@@ -44,6 +46,7 @@ export type RuntimeIpcResult = {
 	executeCommand: { handled: boolean };
 	newSession: { cancelled: boolean };
 	compact: { result: unknown };
+	stopMonitor: { stopped: boolean };
 	getSnapshot: { snapshot: AgentRuntimeSnapshot };
 	shutdown: Record<string, never>;
 	"a2a/message/send": { task: A2ATask };

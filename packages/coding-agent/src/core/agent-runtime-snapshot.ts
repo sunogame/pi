@@ -2,6 +2,7 @@ import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core"
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "./agent-session.ts";
 import type { ToolInfo } from "./extensions/index.ts";
+import type { MonitorTaskSnapshot, RuntimeNotification } from "./monitor-manager.ts";
 import type { SessionEntry } from "./session-manager.ts";
 import type { SourceInfo } from "./source-info.ts";
 
@@ -21,6 +22,7 @@ export interface AgentRuntimeIdentity {
 export type AgentRuntimeCapability =
 	| "event_replay"
 	| "extension_events"
+	| "monitor_notifications"
 	| "runtime_commands"
 	| "prompt"
 	| "abort"
@@ -93,9 +95,15 @@ export interface RunSnapshot {
 	retryAttempt: number;
 	lastError?: string;
 	pendingUserMessages: PendingUserMessageSnapshot[];
+	pendingNotifications: RuntimeNotification[];
 	pendingApprovals: PendingApprovalSnapshot[];
 	inputRequired?: InputRequiredSnapshot;
 	activeToolExecutions: ToolExecutionSnapshot[];
+}
+
+export interface MonitorsSnapshot {
+	active: MonitorTaskSnapshot[];
+	recent: MonitorTaskSnapshot[];
 }
 
 export interface ToolsSnapshot {
@@ -146,6 +154,7 @@ export interface AgentRuntimeSnapshot {
 	session: SessionSnapshot;
 	transcript: TranscriptSnapshot;
 	run: RunSnapshot;
+	monitors: MonitorsSnapshot;
 	tools: ToolsSnapshot;
 	resources: RuntimeResourceSnapshot;
 	modelRegistry: RuntimeModelRegistrySnapshot;
@@ -165,6 +174,11 @@ export type AgentRuntimeEvent =
 	| { id: number; type: "tool_end"; tool: ToolExecutionSnapshot }
 	| { id: number; type: "queue_changed"; pendingUserMessages: PendingUserMessageSnapshot[] }
 	| { id: number; type: "commands_changed"; commands: RuntimeCommandSnapshot[] }
+	| { id: number; type: "monitor_started"; monitor: MonitorTaskSnapshot }
+	| { id: number; type: "monitor_output"; monitorId: string; lineCount: number; preview: string }
+	| { id: number; type: "monitor_ended"; monitor: MonitorTaskSnapshot }
+	| { id: number; type: "notification_queued"; notification: RuntimeNotification }
+	| { id: number; type: "notification_delivered"; notificationId: string }
 	| { id: number; type: "approval_requested"; approval: PendingApprovalSnapshot }
 	| { id: number; type: "approval_resolved"; approvalId: string }
 	| { id: number; type: "input_required"; input: InputRequiredSnapshot }
@@ -361,6 +375,7 @@ export class AgentRuntimeSnapshotProjector {
 		this.capabilities = options.capabilities ?? [
 			"event_replay",
 			"extension_events",
+			"monitor_notifications",
 			"runtime_commands",
 			"prompt",
 			"abort",
@@ -454,10 +469,15 @@ export class AgentRuntimeSnapshotProjector {
 				retryAttempt: session.retryAttempt,
 				lastError: this.lastError,
 				pendingUserMessages: pendingUserMessages(session),
+				pendingNotifications: session.getRuntimeNotifications(),
 				pendingApprovals: [],
 				activeToolExecutions: Array.from(this.activeToolExecutions.values()).filter(
 					(tool) => tool.status === "pending" || tool.status === "running",
 				),
+			},
+			monitors: {
+				active: session.getActiveMonitors(),
+				recent: session.getRecentMonitors(),
 			},
 			tools: {
 				active: session.getActiveToolNames(),
@@ -550,6 +570,26 @@ export class AgentRuntimeSnapshotProjector {
 				break;
 			case "commands_changed":
 				this.emit({ type: "commands_changed", commands: commandsSnapshot(this.session) });
+				break;
+			case "monitor_started":
+				this.emit({ type: "monitor_started", monitor: event.monitor });
+				break;
+			case "monitor_output":
+				this.emit({
+					type: "monitor_output",
+					monitorId: event.monitorId,
+					lineCount: event.lineCount,
+					preview: event.preview,
+				});
+				break;
+			case "monitor_ended":
+				this.emit({ type: "monitor_ended", monitor: event.monitor });
+				break;
+			case "notification_queued":
+				this.emit({ type: "notification_queued", notification: event.notification });
+				break;
+			case "notification_delivered":
+				this.emit({ type: "notification_delivered", notificationId: event.notificationId });
 				break;
 			case "transcript_changed":
 				this.emit({ type: "transcript_changed", reason: event.reason });

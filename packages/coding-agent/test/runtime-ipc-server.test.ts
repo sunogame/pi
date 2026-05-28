@@ -134,6 +134,17 @@ describe("RuntimeIpcServer", () => {
 		client.close();
 	});
 
+	it("serves monitor stop requests", async () => {
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle"));
+		createRuntimeIpcServer(runtime.host, serverTransport);
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		await expect(client.stopMonitor("m_123")).resolves.toBe(true);
+		expect(runtime.stopMonitor).toHaveBeenCalledWith("m_123");
+		client.close();
+	});
+
 	it("serves local A2A message/send and tasks/get", async () => {
 		const { clientTransport, serverTransport } = createTransportPair();
 		const runtime = createFakeRuntime(snapshot(1, "idle"));
@@ -250,6 +261,7 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 	executeExtensionCommand: ReturnType<typeof vi.fn>;
 	newSession: ReturnType<typeof vi.fn>;
 	compact: ReturnType<typeof vi.fn>;
+	stopMonitor: ReturnType<typeof vi.fn>;
 	abort: ReturnType<typeof vi.fn>;
 	currentSnapshot: AgentRuntimeSnapshot;
 	listener?: (event: AgentRuntimeEvent) => void;
@@ -273,6 +285,7 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 		executeExtensionCommand: vi.fn(async () => true),
 		newSession: vi.fn(async () => ({ cancelled: false })),
 		compact: vi.fn(async () => ({ summary: "compacted" })),
+		stopMonitor: vi.fn(() => ({ id: "m_123" })),
 	};
 
 	return {
@@ -284,6 +297,7 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 				prompt: fake.prompt,
 				abort: fake.abort,
 				compact: fake.compact,
+				stopMonitor: fake.stopMonitor,
 				agent: { waitForIdle: vi.fn(async () => {}) },
 				executeExtensionCommand: fake.executeExtensionCommand,
 			},
@@ -294,6 +308,7 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 		executeExtensionCommand: fake.executeExtensionCommand,
 		newSession: fake.newSession,
 		compact: fake.compact,
+		stopMonitor: fake.stopMonitor,
 		get currentSnapshot() {
 			return fake.currentSnapshot;
 		},
@@ -337,9 +352,11 @@ function snapshot(
 			isBashRunning: false,
 			retryAttempt: 0,
 			pendingUserMessages: [],
+			pendingNotifications: [],
 			pendingApprovals: [],
 			activeToolExecutions: [],
 		},
+		monitors: { active: [], recent: [] },
 		tools: { active: [], available: [] },
 		resources: {
 			skills: [],

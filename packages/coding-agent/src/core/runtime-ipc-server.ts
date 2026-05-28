@@ -133,6 +133,13 @@ export class RuntimeIpcServer {
 				const result = await this.runtime.session.compact(customInstructions);
 				return { result };
 			}
+			case "stopMonitor": {
+				const params = readObjectParams(request.params);
+				if (typeof params.id !== "string" || params.id.trim().length === 0) {
+					throw invalidParams("stopMonitor.id must be a non-empty string");
+				}
+				return { stopped: this.runtime.session.stopMonitor(params.id) !== undefined };
+			}
 			case "getSnapshot":
 				return { snapshot: this.runtime.getSnapshot() };
 			case "shutdown":

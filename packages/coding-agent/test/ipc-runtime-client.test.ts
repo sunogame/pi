@@ -156,9 +156,11 @@ function snapshot(
 			isBashRunning: false,
 			retryAttempt: 0,
 			pendingUserMessages: [],
+			pendingNotifications: [],
 			pendingApprovals: [],
 			activeToolExecutions: [],
 		},
+		monitors: { active: [], recent: [] },
 		tools: { active: [], available: [] },
 		resources: {
 			skills: [],

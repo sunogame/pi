@@ -80,6 +80,7 @@ import {
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import type { ModelRegistry } from "./model-registry.ts";
+import { MonitorManager, type MonitorTaskSnapshot, type RuntimeNotification } from "./monitor-manager.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.ts";
@@ -137,6 +138,11 @@ export type AgentSessionEvent =
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
 	| { type: "commands_changed" }
 	| { type: "transcript_changed"; reason: "append" }
+	| { type: "monitor_started"; monitor: MonitorTaskSnapshot }
+	| { type: "monitor_output"; monitorId: string; lineCount: number; preview: string }
+	| { type: "monitor_ended"; monitor: MonitorTaskSnapshot }
+	| { type: "notification_queued"; notification: RuntimeNotification }
+	| { type: "notification_delivered"; notificationId: string }
 	| {
 			type: "compaction_end";
 			reason: "manual" | "threshold" | "overflow";
@@ -269,6 +275,10 @@ export class AgentSession {
 	private _followUpMessages: string[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
+	private _runtimeNotifications: RuntimeNotification[] = [];
+	private _notificationDrainScheduled = false;
+	private _notificationDrainInProgress = false;
+	private _notificationDrainBlocked = false;
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
@@ -285,6 +295,7 @@ export class AgentSession {
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
 	private _pendingBashMessages: BashExecutionMessage[] = [];
+	private _monitorManager: MonitorManager;
 
 	// Extension system
 	private _extensionRunner!: ExtensionRunner;
@@ -334,6 +345,15 @@ export class AgentSession {
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
+		this._monitorManager = new MonitorManager({
+			cwd: this._cwd,
+			shellPath: this.settingsManager.getShellPath(),
+			commandPrefix: this.settingsManager.getShellCommandPrefix(),
+			onNotification: (notification) => this._enqueueRuntimeNotification(notification),
+			onMonitorStarted: (monitor) => this._emit({ type: "monitor_started", monitor }),
+			onMonitorOutput: (event) => this._emit({ type: "monitor_output", ...event }),
+			onMonitorEnded: (monitor) => this._emit({ type: "monitor_ended", monitor }),
+		});
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
@@ -718,6 +738,7 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		this._monitorManager.stopAll();
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
@@ -758,6 +779,25 @@ export class AgentSession {
 	/** Current retry attempt (0 if not retrying) */
 	get retryAttempt(): number {
 		return this._retryAttempt;
+	}
+
+	getRuntimeNotifications(): RuntimeNotification[] {
+		return this._runtimeNotifications.map((notification) => ({
+			...notification,
+			source: { ...notification.source },
+		}));
+	}
+
+	getActiveMonitors(): MonitorTaskSnapshot[] {
+		return this._monitorManager.getActive();
+	}
+
+	getRecentMonitors(): MonitorTaskSnapshot[] {
+		return this._monitorManager.getRecent();
+	}
+
+	stopMonitor(id: string): MonitorTaskSnapshot | undefined {
+		return this._monitorManager.stop(id);
 	}
 
 	/**
@@ -933,6 +973,59 @@ export class AgentSession {
 			}
 		} finally {
 			this._flushPendingBashMessages();
+			this._notificationDrainBlocked = false;
+			this._scheduleRuntimeNotificationDrain();
+		}
+	}
+
+	private _enqueueRuntimeNotification(notification: RuntimeNotification): void {
+		this._runtimeNotifications.push(notification);
+		this._emit({ type: "notification_queued", notification });
+		this._scheduleRuntimeNotificationDrain();
+	}
+
+	private _scheduleRuntimeNotificationDrain(): void {
+		if (this._notificationDrainScheduled || this._notificationDrainInProgress || this._notificationDrainBlocked) {
+			return;
+		}
+		this._notificationDrainScheduled = true;
+		queueMicrotask(() => {
+			this._notificationDrainScheduled = false;
+			void this._drainRuntimeNotifications();
+		});
+	}
+
+	private async _drainRuntimeNotifications(): Promise<void> {
+		if (this._notificationDrainInProgress || this.isStreaming || this._runtimeNotifications.length === 0) {
+			return;
+		}
+		this._notificationDrainInProgress = true;
+		try {
+			while (!this.isStreaming && this._runtimeNotifications.length > 0) {
+				const notification = this._runtimeNotifications.shift();
+				if (!notification) break;
+				try {
+					await this.sendCustomMessage(
+						{
+							customType: "monitor-notification",
+							content: notification.text,
+							display: true,
+							details: notification,
+						},
+						{ triggerTurn: true },
+					);
+					this._emit({ type: "notification_delivered", notificationId: notification.id });
+				} catch {
+					this._runtimeNotifications.unshift(notification);
+					this._notificationDrainBlocked = true;
+					break;
+				}
+			}
+		} finally {
+			this._notificationDrainInProgress = false;
+			if (this._runtimeNotifications.length > 0 && !this._notificationDrainBlocked) {
+				this._scheduleRuntimeNotificationDrain();
+			}
 		}
 	}
 
@@ -2401,6 +2494,7 @@ export class AgentSession {
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					monitorManager: this._monitorManager,
 				});
 
 		this._baseToolDefinitions = new Map(
@@ -2429,7 +2523,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write"];
+			: ["read", "bash", "edit", "write", "monitor"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,

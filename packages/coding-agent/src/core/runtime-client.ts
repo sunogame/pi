@@ -44,6 +44,7 @@ export interface RuntimeClient {
 	executeCommand(name: string, args: string): Promise<boolean>;
 	newSession(options?: RuntimeNewSessionOptions): Promise<{ cancelled: boolean }>;
 	compact(customInstructions?: string): Promise<RuntimeCompactionResult>;
+	stopMonitor(id: string): Promise<boolean>;
 }
 
 /**
@@ -347,6 +348,12 @@ export class InProcessRuntimeClient implements LocalRuntimeClient {
 		}
 	}
 
+	async stopMonitor(id: string): Promise<boolean> {
+		const stopped = this.runtime.session.stopMonitor(id) !== undefined;
+		this.refreshFromRuntime();
+		return stopped;
+	}
+
 	async abortCompaction(): Promise<void> {
 		this.runtime.session.abortCompaction();
 		this.refreshFromRuntime();
@@ -521,6 +528,59 @@ function applyRuntimeEvent(snapshot: AgentRuntimeSnapshot, event: AgentRuntimeEv
 			return { ...next, run: { ...next.run, pendingUserMessages: event.pendingUserMessages } };
 		case "commands_changed":
 			return { ...next, commands: event.commands };
+		case "monitor_started":
+			return {
+				...next,
+				monitors: {
+					...next.monitors,
+					active: upsertById(next.monitors.active, event.monitor),
+				},
+			};
+		case "monitor_output":
+			return {
+				...next,
+				monitors: {
+					...next.monitors,
+					active: next.monitors.active.map((monitor) =>
+						monitor.id === event.monitorId
+							? {
+									...monitor,
+									lineCount: monitor.lineCount + event.lineCount,
+									lastEvent: event.preview,
+								}
+							: monitor,
+					),
+				},
+			};
+		case "monitor_ended":
+			return {
+				...next,
+				monitors: {
+					active: next.monitors.active.filter((monitor) => monitor.id !== event.monitor.id),
+					recent: [
+						event.monitor,
+						...next.monitors.recent.filter((monitor) => monitor.id !== event.monitor.id),
+					].slice(0, 20),
+				},
+			};
+		case "notification_queued":
+			return {
+				...next,
+				run: {
+					...next.run,
+					pendingNotifications: [...next.run.pendingNotifications, event.notification],
+				},
+			};
+		case "notification_delivered":
+			return {
+				...next,
+				run: {
+					...next.run,
+					pendingNotifications: next.run.pendingNotifications.filter(
+						(notification) => notification.id !== event.notificationId,
+					),
+				},
+			};
 		case "approval_requested":
 			return {
 				...next,
@@ -598,6 +658,14 @@ function endMessageRunSnapshot(run: AgentRuntimeSnapshot["run"], message: AgentM
 
 function upsertByToolCallId<T extends { toolCallId: string }>(items: T[], item: T): T[] {
 	const index = items.findIndex((candidate) => candidate.toolCallId === item.toolCallId);
+	if (index === -1) {
+		return [...items, item];
+	}
+	return items.map((candidate, candidateIndex) => (candidateIndex === index ? item : candidate));
+}
+
+function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
+	const index = items.findIndex((candidate) => candidate.id === item.id);
 	if (index === -1) {
 		return [...items, item];
 	}

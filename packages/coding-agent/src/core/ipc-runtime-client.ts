@@ -98,6 +98,11 @@ export class IpcRuntimeClient implements RuntimeClient {
 		return result.result as RuntimeCompactionResult;
 	}
 
+	async stopMonitor(id: string): Promise<boolean> {
+		const result = await this.request("stopMonitor", { id });
+		return result.stopped;
+	}
+
 	async shutdown(): Promise<void> {
 		await this.request("shutdown", undefined);
 	}
