@@ -226,10 +226,9 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 			promptSnippet: "a2a_send_message: send a message to a peer agent; returns an A2A Task.",
 			promptGuidelines: [
 				"Use a2a_send_message only when a peer Agent Card indicates it is a better fit for a focused question or task.",
-				"Peer agents are opaque and do not share your private memory; include the necessary context in the message.",
+				"Include the necessary context in the message.",
 				"When a2a_send_message returns a non-terminal Task, pi automatically starts an A2A task watcher and will notify you when the task reaches a terminal state. Do not start a shell monitor for A2A tasks.",
 				"blocking=true is only an immediate-start optimization; queued tasks return without waiting to avoid deadlocks.",
-				"When you receive an <a2a-message>, answer it directly in the current turn. Your assistant response completes the sender's Task; do not call a2a_send_message back unless you need to start a separate new task.",
 			],
 			parameters: sendMessageSchema,
 			executionMode: "sequential",
@@ -451,6 +450,7 @@ async function watchA2ATaskByEvent(
 	options: LocalA2AToolsOptions,
 ): Promise<void> {
 	let client: Awaited<ReturnType<typeof connectA2AClient>> | undefined;
+	let unsubscribeClientClose: (() => void) | undefined;
 	let lastKnownTask = task;
 	let done = false;
 	const finish = (next: A2ATask, notificationStatus = "terminal", error?: string) => {
@@ -460,6 +460,8 @@ async function watchA2ATaskByEvent(
 		done = true;
 		clearTimeout(timeout);
 		activeA2ATaskWatchers.delete(key);
+		unsubscribeClientClose?.();
+		unsubscribeClientClose = undefined;
 		// Closing the transport is enough to detach this watcher. Sending an
 		// explicit detach request here creates a pending IPC request that close()
 		// immediately rejects, which can surface as an unhandled rejection.
@@ -491,6 +493,9 @@ async function watchA2ATaskByEvent(
 
 	try {
 		client = await connectA2AClient(agentDir, agent);
+		unsubscribeClientClose = client.onClose(() => {
+			finish(lastKnownTask, "watcher-error", `A2A task watcher disconnected from ${agent}.`);
+		});
 		await client.attach({
 			listener: (event) => {
 				if (event.type !== "a2a_task_changed" || event.task.id !== task.id) {

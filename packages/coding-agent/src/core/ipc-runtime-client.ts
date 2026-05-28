@@ -77,6 +77,10 @@ export class IpcRuntimeClient implements RuntimeClient {
 		void this.request("detach", undefined).catch(() => {});
 	}
 
+	onClose(cb: () => void): () => void {
+		return this.transport.onClose(cb);
+	}
+
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		await this.request("prompt", { text, options });
 	}

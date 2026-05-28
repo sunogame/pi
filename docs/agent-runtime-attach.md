@@ -235,6 +235,7 @@ type AgentRuntimeEvent =
   | { id: number; type: "approval_resolved"; approvalId: string }
   | { id: number; type: "input_required"; input: InputRequiredSnapshot }
   | { id: number; type: "input_resolved"; inputId: string }
+  | { id: number; type: "a2a_task_changed"; task: A2ATaskStatusSnapshot }
   | { id: number; type: "extension_event"; namespace: string; payload: unknown }
   | { id: number; type: "compaction_start"; reason: string }
   | {

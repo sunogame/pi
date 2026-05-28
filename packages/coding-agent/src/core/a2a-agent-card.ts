@@ -98,6 +98,7 @@ export function formatTeamAgentCardsForPrompt(cards: readonly PiA2AAgentCard[], 
 	const lines = [
 		"<a2a_rules>",
 		"Peer agents are available through A2A-style tools.",
+		"Peer agents are opaque and do not share your private memory; include the necessary context when asking them to help.",
 		"Use Agent Cards to choose the right peer.",
 		"a2a_send_message creates a peer-owned A2A Task. Non-terminal tasks are watched automatically and later produce <a2a-task-notification> runtime notifications.",
 		"<receiving>",
