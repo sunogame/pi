@@ -16,7 +16,13 @@ import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../core/agent-runt
 import { FooterDataProvider } from "../core/footer-data-provider.ts";
 import { createIpcRuntimeClient, type IpcRuntimeClient } from "../core/ipc-runtime-client.ts";
 import { KeybindingsManager } from "../core/keybindings.ts";
-import { createStreamRuntimeTransport } from "../core/runtime-transport.ts";
+import {
+	listRuntimeRegistryEntries,
+	readRuntimeRegistryEntry,
+	removeRuntimeRegistryEntry,
+} from "../core/runtime-registry.ts";
+import { connectRuntimeSocket } from "../core/runtime-socket-transport.ts";
+import { createStreamRuntimeTransport, type RuntimeTransport } from "../core/runtime-transport.ts";
 import { CountdownTimer } from "./interactive/components/countdown-timer.ts";
 import { CustomEditor } from "./interactive/components/custom-editor.ts";
 import { RuntimeFooterComponent } from "./interactive/components/footer.ts";
@@ -36,17 +42,66 @@ export function toRuntimeIpcArgs(args: readonly string[]): string[] {
 	return next;
 }
 
-export async function runRuntimeAttachMode(args: readonly string[] = process.argv.slice(2)): Promise<void> {
-	const child = spawnRuntimeProcess(args);
-	const client = createIpcRuntimeClient(
-		createStreamRuntimeTransport(child.stdout, child.stdin),
-		createPlaceholderSnapshot(process.cwd()),
-	);
+export interface RuntimeAttachModeOptions {
+	agentDir?: string;
+	attach?: string;
+	runtimeSocket?: string;
+}
+
+export async function runRuntimeAttachMode(
+	args: readonly string[] = process.argv.slice(2),
+	options: RuntimeAttachModeOptions = {},
+): Promise<void> {
+	const connection = await createRuntimeAttachConnection(args, options);
+	const client = createIpcRuntimeClient(connection.transport, createPlaceholderSnapshot(connection.cwd));
 	initTheme(undefined, true);
 	const tui = new TUI(new ProcessTerminal(), true);
-	const view = new RuntimeAttachView(tui, client, child);
+	const view = new RuntimeAttachView(tui, client, {
+		agentDir: options.agentDir,
+		child: connection.child,
+	});
 
 	await view.run();
+}
+
+async function createRuntimeAttachConnection(
+	args: readonly string[],
+	options: RuntimeAttachModeOptions,
+): Promise<{ transport: RuntimeTransport; cwd: string; child?: ChildProcessWithoutNullStreams }> {
+	if (options.runtimeSocket) {
+		return {
+			transport: await connectRuntimeSocket(options.runtimeSocket),
+			cwd: process.cwd(),
+		};
+	}
+	if (options.attach) {
+		if (!options.agentDir) {
+			throw new Error("--attach requires an agent directory");
+		}
+		const entry = readRuntimeRegistryEntry(options.agentDir, options.attach);
+		if (!entry) {
+			throw new Error(`No running runtime registered as "${options.attach}"`);
+		}
+		let transport: RuntimeTransport;
+		try {
+			transport = await connectRuntimeSocket(entry.socketPath);
+		} catch (error) {
+			removeRuntimeRegistryEntry(options.agentDir, options.attach);
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`Registered runtime "${options.attach}" is unavailable: ${message}`);
+		}
+		return {
+			transport,
+			cwd: entry.cwd,
+		};
+	}
+
+	const child = spawnRuntimeProcess(args);
+	return {
+		transport: createStreamRuntimeTransport(child.stdout, child.stdin),
+		cwd: process.cwd(),
+		child,
+	};
 }
 
 function spawnRuntimeProcess(args: readonly string[]): ChildProcessWithoutNullStreams {
@@ -64,10 +119,12 @@ function spawnRuntimeProcess(args: readonly string[]): ChildProcessWithoutNullSt
 
 class RuntimeAttachView {
 	private readonly tui: TUI;
-	private readonly client: IpcRuntimeClient;
-	private readonly child: ChildProcessWithoutNullStreams;
+	private client: IpcRuntimeClient;
+	private child?: ChildProcessWithoutNullStreams;
+	private readonly agentDir?: string;
 	private readonly root = new Container();
 	private readonly header = new RuntimeAttachHeader();
+	private readonly runtimeBar = new Text("", 1, 0);
 	private readonly statusContainer = new Container();
 	private readonly transcript: RuntimeTranscriptView;
 	private readonly pendingMessages = new RuntimePendingMessagesView();
@@ -87,10 +144,15 @@ class RuntimeAttachView {
 	private unsubscribeStore?: () => void;
 	private finish?: () => void;
 
-	constructor(tui: TUI, client: IpcRuntimeClient, child: ChildProcessWithoutNullStreams) {
+	constructor(
+		tui: TUI,
+		client: IpcRuntimeClient,
+		options: { agentDir?: string; child?: ChildProcessWithoutNullStreams },
+	) {
 		this.tui = tui;
 		this.client = client;
-		this.child = child;
+		this.agentDir = options.agentDir;
+		this.child = options.child;
 		this.keybindings = KeybindingsManager.create();
 		setKeybindings(this.keybindings);
 		this.footerDataProvider = new FooterDataProvider(client.store.snapshot.agent.cwd);
@@ -128,6 +190,7 @@ class RuntimeAttachView {
 		});
 
 		this.root.addChild(this.header);
+		this.root.addChild(this.runtimeBar);
 		this.root.addChild(this.statusContainer);
 		this.root.addChild(this.transcript);
 		this.root.addChild(this.pendingMessages);
@@ -149,7 +212,7 @@ class RuntimeAttachView {
 				this.stopStatusLoader();
 				this.footerDataProvider.dispose();
 				this.client.close();
-				if (!this.child.killed) {
+				if (this.child && !this.child.killed) {
 					this.child.kill("SIGTERM");
 				}
 				this.tui.stop();
@@ -161,16 +224,7 @@ class RuntimeAttachView {
 			};
 			this.finish = () => finish();
 
-			this.child.stderr.on("data", (chunk: Buffer) => {
-				this.childStderr = chunk.toString("utf8").trim().split("\n").at(-1) ?? "";
-				this.renderStatus(this.client.store.snapshot);
-			});
-			this.child.on("error", (error) => finish(error));
-			this.child.on("exit", (code, signal) => {
-				if (!this.stopped) {
-					finish(new Error(`Runtime IPC child exited (${signal ?? code ?? "unknown"})`));
-				}
-			});
+			this.bindChildHandlers(finish);
 
 			this.tui.addInputListener((data) => {
 				if (data === "\x03" || data === "\x04") {
@@ -180,14 +234,7 @@ class RuntimeAttachView {
 				return undefined;
 			});
 
-			this.unsubscribeStore = this.client.store.subscribe((snapshot, event) => {
-				this.renderStatus(snapshot);
-				if (event) {
-					this.handleRuntimeEvent(event, snapshot);
-				} else {
-					this.transcript.renderSnapshot(snapshot, { populateHistory: true });
-				}
-			});
+			this.subscribeClient();
 			this.tui.start();
 			this.renderSnapshot(this.client.store.snapshot);
 
@@ -219,6 +266,9 @@ class RuntimeAttachView {
 			return;
 		}
 		if (trimmed.startsWith("/")) {
+			if (await this.executeAttachCommand(trimmed)) {
+				return;
+			}
 			await this.executeRuntimeCommand(trimmed);
 			return;
 		}
@@ -226,6 +276,103 @@ class RuntimeAttachView {
 		this.lastError = undefined;
 		this.renderStatus(this.client.store.snapshot);
 		await this.client.prompt(text).catch((error: unknown) => this.setError(error));
+	}
+
+	private async executeAttachCommand(input: string): Promise<boolean> {
+		const command = parseRuntimeCommand(input);
+		if (!command) {
+			return false;
+		}
+		if (command.name === "attach" || command.name === "switch") {
+			const runtimeId = command.args.trim();
+			if (!runtimeId) {
+				this.showRuntimeList();
+				return true;
+			}
+			await this.switchRuntime(runtimeId);
+			return true;
+		}
+		if (command.name === "next" || command.name === "prev") {
+			await this.switchAdjacentRuntime(command.name === "next" ? 1 : -1);
+			return true;
+		}
+		if (command.name === "runtimes") {
+			this.showRuntimeList();
+			return true;
+		}
+		return false;
+	}
+
+	private async switchRuntime(runtimeId: string): Promise<void> {
+		if (!this.agentDir) {
+			this.showStatusMessage(theme.fg("warning", "Runtime registry is unavailable in this attach session."));
+			return;
+		}
+		const entry = readRuntimeRegistryEntry(this.agentDir, runtimeId);
+		if (!entry) {
+			this.showStatusMessage(theme.fg("warning", `No running runtime registered as "${runtimeId}"`));
+			return;
+		}
+		try {
+			const transport = await connectRuntimeSocket(entry.socketPath);
+			const nextClient = createIpcRuntimeClient(transport, createPlaceholderSnapshot(entry.cwd));
+			await nextClient.attach();
+			this.unsubscribeStore?.();
+			this.unsubscribeStore = undefined;
+			this.client.close();
+			if (this.child && !this.child.killed) {
+				this.child.kill("SIGTERM");
+			}
+			this.child = undefined;
+			this.childStderr = "";
+			this.lastError = undefined;
+			this.client = nextClient;
+			this.subscribeClient();
+			this.setupAutocompleteProvider(this.client.store.snapshot);
+			this.transcript.updateOptions({ cwd: this.client.store.snapshot.agent.cwd });
+			this.renderSnapshot(this.client.store.snapshot);
+		} catch (error) {
+			this.setError(error);
+		}
+	}
+
+	private async switchAdjacentRuntime(direction: 1 | -1): Promise<void> {
+		if (!this.agentDir) {
+			this.showStatusMessage(theme.fg("warning", "Runtime registry is unavailable in this attach session."));
+			return;
+		}
+		const entries = listRuntimeRegistryEntries(this.agentDir);
+		if (entries.length === 0) {
+			this.showStatusMessage(theme.fg("muted", "No registered runtimes."));
+			return;
+		}
+		const currentId = this.client.store.snapshot.agent.agentId;
+		const currentIndex = Math.max(
+			0,
+			entries.findIndex((entry) => entry.agentId === currentId),
+		);
+		const nextIndex = (currentIndex + direction + entries.length) % entries.length;
+		await this.switchRuntime(entries[nextIndex].agentId);
+	}
+
+	private showRuntimeList(): void {
+		if (!this.agentDir) {
+			this.showStatusMessage(theme.fg("warning", "Runtime registry is unavailable in this attach session."));
+			return;
+		}
+		const entries = listRuntimeRegistryEntries(this.agentDir);
+		if (entries.length === 0) {
+			this.showStatusMessage(theme.fg("muted", "No registered runtimes."));
+			return;
+		}
+		this.showStatusMessage(
+			entries
+				.map(
+					(entry) =>
+						`${entry.agentId}:${entry.status}${entry.agentId === this.client.store.snapshot.agent.agentId ? "*" : ""}`,
+				)
+				.join("  "),
+		);
 	}
 
 	private async executeRuntimeCommand(input: string): Promise<void> {
@@ -259,6 +406,7 @@ class RuntimeAttachView {
 	private renderStatus(snapshot: AgentRuntimeSnapshot): void {
 		this.updateTerminalTitle(snapshot);
 		this.header.renderSnapshot(snapshot);
+		this.renderRuntimeBar(snapshot);
 		this.footerDataProvider.setCwd(snapshot.agent.cwd);
 		this.footer.setSnapshot(snapshot);
 		this.pendingMessages.renderSnapshot(snapshot);
@@ -274,8 +422,33 @@ class RuntimeAttachView {
 			statusParts.push(chalk.yellow(this.childStderr));
 		}
 		this.renderRuntimeStatus(snapshot, statusParts.join("  "));
-		this.help.setText(chalk.dim("Enter sends prompt. Esc aborts. /abort aborts. /exit quits."));
+		this.help.setText(
+			chalk.dim(
+				"Enter sends prompt. Esc aborts. /attach <id> switches. /next cycles. /runtimes lists. /exit quits.",
+			),
+		);
 		this.tui.requestRender();
+	}
+
+	private renderRuntimeBar(snapshot: AgentRuntimeSnapshot): void {
+		if (!this.agentDir) {
+			this.runtimeBar.setText("");
+			return;
+		}
+		const entries = listRuntimeRegistryEntries(this.agentDir);
+		if (entries.length === 0) {
+			this.runtimeBar.setText(theme.fg("dim", "No registered runtimes."));
+			return;
+		}
+		this.runtimeBar.setText(
+			entries
+				.map((entry) => {
+					const active = entry.agentId === snapshot.agent.agentId;
+					const label = `${entry.agentId}:${entry.status}`;
+					return active ? theme.bold(theme.fg("accent", `[${label}]`)) : theme.fg("dim", label);
+				})
+				.join(theme.fg("muted", "  ")),
+		);
 	}
 
 	private updateTerminalTitle(snapshot: AgentRuntimeSnapshot): void {
@@ -425,6 +598,33 @@ class RuntimeAttachView {
 			default:
 				break;
 		}
+	}
+
+	private subscribeClient(): void {
+		this.unsubscribeStore = this.client.store.subscribe((snapshot, event) => {
+			this.renderStatus(snapshot);
+			if (event) {
+				this.handleRuntimeEvent(event, snapshot);
+			} else {
+				this.transcript.renderSnapshot(snapshot, { populateHistory: true });
+			}
+		});
+	}
+
+	private bindChildHandlers(finish: (error?: Error) => void): void {
+		if (!this.child) {
+			return;
+		}
+		this.child.stderr.on("data", (chunk: Buffer) => {
+			this.childStderr = chunk.toString("utf8").trim().split("\n").at(-1) ?? "";
+			this.renderStatus(this.client.store.snapshot);
+		});
+		this.child.on("error", (error) => finish(error));
+		this.child.on("exit", (code, signal) => {
+			if (!this.stopped) {
+				finish(new Error(`Runtime IPC child exited (${signal ?? code ?? "unknown"})`));
+			}
+		});
 	}
 }
 

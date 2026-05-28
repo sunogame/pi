@@ -8,7 +8,8 @@ export type RuntimeIpcMethod =
 	| "abort"
 	| "waitForIdle"
 	| "executeCommand"
-	| "getSnapshot";
+	| "getSnapshot"
+	| "shutdown";
 
 export type RuntimeIpcAttachResult = Omit<AgentRuntimeAttachResult, "unsubscribe">;
 
@@ -20,6 +21,7 @@ export type RuntimeIpcRequestParams = {
 	waitForIdle: undefined;
 	executeCommand: { name: string; args: string };
 	getSnapshot: undefined;
+	shutdown: undefined;
 };
 
 export type RuntimeIpcResult = {
@@ -30,6 +32,7 @@ export type RuntimeIpcResult = {
 	waitForIdle: Record<string, never>;
 	executeCommand: { handled: boolean };
 	getSnapshot: { snapshot: AgentRuntimeSnapshot };
+	shutdown: Record<string, never>;
 };
 
 export type RuntimeIpcRequest<M extends RuntimeIpcMethod = RuntimeIpcMethod> = {

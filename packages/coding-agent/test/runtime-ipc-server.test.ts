@@ -8,6 +8,7 @@ import type { RuntimeTransport } from "../src/core/runtime-transport.ts";
 class MemoryRuntimeTransport implements RuntimeTransport {
 	peer?: MemoryRuntimeTransport;
 	private readonly listeners = new Set<(line: string) => void>();
+	private readonly closeListeners = new Set<() => void>();
 	private closed = false;
 
 	async send(line: string): Promise<void> {
@@ -23,9 +24,20 @@ class MemoryRuntimeTransport implements RuntimeTransport {
 		};
 	}
 
+	onClose(cb: () => void): () => void {
+		this.closeListeners.add(cb);
+		return () => {
+			this.closeListeners.delete(cb);
+		};
+	}
+
 	close(): void {
 		this.closed = true;
 		this.listeners.clear();
+		for (const listener of this.closeListeners) {
+			listener();
+		}
+		this.closeListeners.clear();
 	}
 
 	private emit(line: string): void {
@@ -76,6 +88,35 @@ describe("RuntimeIpcServer", () => {
 		await tick();
 
 		expect(client.store.snapshot.session.sessionName).toBe("resynced");
+	});
+
+	it("detaches runtime listeners when the transport closes", async () => {
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle"));
+		createRuntimeIpcServer(runtime.host, serverTransport);
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		await client.attach();
+		expect(runtime.listener).toBeDefined();
+
+		serverTransport.close();
+
+		expect(runtime.listener).toBeUndefined();
+		client.close();
+	});
+
+	it("serves shutdown requests", async () => {
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle"));
+		const onShutdown = vi.fn();
+		createRuntimeIpcServer(runtime.host, serverTransport, { onShutdown });
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		await client.shutdown();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(onShutdown).toHaveBeenCalledTimes(1);
+		client.close();
 	});
 });
 

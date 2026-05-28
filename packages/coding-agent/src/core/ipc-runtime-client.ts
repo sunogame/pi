@@ -83,6 +83,10 @@ export class IpcRuntimeClient implements RuntimeClient {
 		return result.handled;
 	}
 
+	async shutdown(): Promise<void> {
+		await this.request("shutdown", undefined);
+	}
+
 	close(): void {
 		this.unsubscribeTransport();
 		this.transport.close();

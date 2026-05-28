@@ -12,12 +12,14 @@ import {
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { createIpcRuntimeClient } from "../src/core/ipc-runtime-client.ts";
 import { createRuntimeIpcServer } from "../src/core/runtime-ipc-server.ts";
+import { connectRuntimeSocket, listenRuntimeSocket } from "../src/core/runtime-socket-transport.ts";
 import type { RuntimeTransport } from "../src/core/runtime-transport.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 
 class MemoryRuntimeTransport implements RuntimeTransport {
 	peer?: MemoryRuntimeTransport;
 	private readonly listeners = new Set<(line: string) => void>();
+	private readonly closeListeners = new Set<() => void>();
 	private closed = false;
 
 	async send(line: string): Promise<void> {
@@ -33,9 +35,20 @@ class MemoryRuntimeTransport implements RuntimeTransport {
 		};
 	}
 
+	onClose(cb: () => void): () => void {
+		this.closeListeners.add(cb);
+		return () => {
+			this.closeListeners.delete(cb);
+		};
+	}
+
 	close(): void {
 		this.closed = true;
 		this.listeners.clear();
+		for (const listener of this.closeListeners) {
+			listener();
+		}
+		this.closeListeners.clear();
 	}
 
 	private emit(line: string): void {
@@ -62,6 +75,35 @@ describe("runtime IPC e2e", () => {
 		cleanups.push(() => {
 			client.close();
 			server.dispose();
+		});
+
+		await client.attach();
+		await client.prompt("hello");
+		await client.waitForIdle();
+		await tick();
+
+		expect(client.store.snapshot.transcript.entries.some((entry) => entry.type === "message")).toBe(true);
+		expect(client.store.snapshot.agent.agentId).toBe("backend");
+	});
+
+	it("attaches to a real runtime over a Unix socket", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+		const runtimeHost = await createRuntimeHost();
+		const socketPath = join(tmpdir(), `pi-runtime-ipc-e2e-${process.pid}-${Date.now()}.sock`);
+		const servers = new Set<ReturnType<typeof createRuntimeIpcServer>>();
+		const socketServer = await listenRuntimeSocket(socketPath, (transport) => {
+			servers.add(createRuntimeIpcServer(runtimeHost, transport));
+		});
+		const clientTransport = await connectRuntimeSocket(socketPath);
+		const client = createIpcRuntimeClient(clientTransport, runtimeHost.getSnapshot());
+		cleanups.push(async () => {
+			client.close();
+			for (const server of servers) {
+				server.dispose();
+			}
+			await socketServer.close();
 		});
 
 		await client.attach();

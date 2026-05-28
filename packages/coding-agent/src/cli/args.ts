@@ -21,6 +21,9 @@ export interface Args {
 	help?: boolean;
 	version?: boolean;
 	mode?: Mode;
+	runtimeId?: string;
+	runtimeSocket?: string;
+	attach?: string;
 	noSession?: boolean;
 	session?: string;
 	fork?: string;
@@ -76,6 +79,12 @@ export function parseArgs(args: string[]): Args {
 			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "runtime-ipc" || mode === "attach-ipc") {
 				result.mode = mode;
 			}
+		} else if (arg === "--runtime-id" && i + 1 < args.length) {
+			result.runtimeId = args[++i];
+		} else if (arg === "--runtime-socket" && i + 1 < args.length) {
+			result.runtimeSocket = args[++i];
+		} else if (arg === "--attach" && i + 1 < args.length) {
+			result.attach = args[++i];
 		} else if (arg === "--continue" || arg === "-c") {
 			result.continue = true;
 		} else if (arg === "--resume" || arg === "-r") {
@@ -211,6 +220,8 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} update [source|self|pi]   Update pi and installed extensions
   ${APP_NAME} list                      List installed extensions from settings
   ${APP_NAME} config                    Open TUI to enable/disable package resources
+  ${APP_NAME} runtime <command>         Manage local runtime processes
+  ${APP_NAME} supervisor <command>      Start configured local runtimes
   ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list
 
 ${chalk.bold("Options:")}
@@ -220,6 +231,9 @@ ${chalk.bold("Options:")}
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --mode <mode>                  Output mode: text (default), json, rpc, runtime-ipc, or attach-ipc
+  --runtime-id <id>              Runtime process id for socket registry mode
+  --runtime-socket <path>        Unix socket path for runtime-ipc or attach-ipc
+  --attach <id>                  Attach to a registered runtime by id
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume

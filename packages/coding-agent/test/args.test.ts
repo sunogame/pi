@@ -135,6 +135,23 @@ describe("parseArgs", () => {
 			expect(result.mode).toBe("attach-ipc");
 		});
 
+		test("parses runtime attach flags", () => {
+			const result = parseArgs([
+				"--mode",
+				"attach-ipc",
+				"--runtime-id",
+				"backend",
+				"--runtime-socket",
+				"/tmp/backend.sock",
+				"--attach",
+				"qa",
+			]);
+			expect(result.mode).toBe("attach-ipc");
+			expect(result.runtimeId).toBe("backend");
+			expect(result.runtimeSocket).toBe("/tmp/backend.sock");
+			expect(result.attach).toBe("qa");
+		});
+
 		test("parses --session", () => {
 			const result = parseArgs(["--session", "/path/to/session.jsonl"]);
 			expect(result.session).toBe("/path/to/session.jsonl");

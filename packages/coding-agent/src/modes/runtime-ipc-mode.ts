@@ -1,10 +1,32 @@
 import { Writable } from "node:stream";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import { takeOverStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
+import type { RuntimeIpcServer } from "../core/runtime-ipc-server.ts";
 import { createRuntimeIpcServer } from "../core/runtime-ipc-server.ts";
+import {
+	getDefaultRuntimeSocketPath,
+	type RuntimeRegistryEntry,
+	removeRuntimeRegistryEntry,
+	writeRuntimeRegistryEntry,
+} from "../core/runtime-registry.ts";
+import { listenRuntimeSocket } from "../core/runtime-socket-transport.ts";
 import { createStreamRuntimeTransport } from "../core/runtime-transport.ts";
 
-export async function runRuntimeIpcMode(runtimeHost: AgentSessionRuntime): Promise<void> {
+export interface RuntimeIpcModeOptions {
+	agentDir?: string;
+	runtimeId?: string;
+	socketPath?: string;
+}
+
+export async function runRuntimeIpcMode(
+	runtimeHost: AgentSessionRuntime,
+	options: RuntimeIpcModeOptions = {},
+): Promise<void> {
+	if (options.runtimeId || options.socketPath) {
+		await runRuntimeSocketIpcMode(runtimeHost, options);
+		return;
+	}
+
 	takeOverStdout();
 
 	const output = new Writable({
@@ -17,7 +39,9 @@ export async function runRuntimeIpcMode(runtimeHost: AgentSessionRuntime): Promi
 		},
 	});
 	const transport = createStreamRuntimeTransport(process.stdin, output);
-	const server = createRuntimeIpcServer(runtimeHost, transport);
+	const server = createRuntimeIpcServer(runtimeHost, transport, {
+		onShutdown: () => process.stdin.emit("end"),
+	});
 
 	process.stdin.resume();
 
@@ -27,4 +51,84 @@ export async function runRuntimeIpcMode(runtimeHost: AgentSessionRuntime): Promi
 			process.exit(0);
 		});
 	});
+}
+
+async function runRuntimeSocketIpcMode(
+	runtimeHost: AgentSessionRuntime,
+	options: RuntimeIpcModeOptions,
+): Promise<void> {
+	const agentDir = options.agentDir;
+	const runtimeId = options.runtimeId ?? "runtime";
+	if (!agentDir && !options.socketPath) {
+		throw new Error("runtime-ipc socket mode requires either agentDir or socketPath");
+	}
+	const socketPath = options.socketPath ?? getDefaultRuntimeSocketPath(agentDir as string, runtimeId);
+	const servers = new Set<RuntimeIpcServer>();
+	const createdAt = new Date().toISOString();
+	let requestShutdown: (() => void) | undefined;
+	const socketServer = await listenRuntimeSocket(socketPath, (transport) => {
+		const server = createRuntimeIpcServer(runtimeHost, transport, {
+			onShutdown: () => requestShutdown?.(),
+		});
+		servers.add(server);
+	});
+
+	const writeRegistry = () => {
+		if (!agentDir) {
+			return;
+		}
+		writeRuntimeRegistryEntry(agentDir, createRegistryEntry(runtimeHost, runtimeId, socketPath, createdAt));
+	};
+	const unsubscribeRegistryUpdates = runtimeHost.subscribeRuntimeEvents(() => {
+		writeRegistry();
+	});
+	writeRegistry();
+	process.stderr.write(`Runtime IPC listening on ${socketPath}\n`);
+
+	await new Promise<void>((resolve) => {
+		requestShutdown = resolve;
+		const cleanup = () => {
+			process.off("SIGINT", cleanup);
+			process.off("SIGTERM", cleanup);
+			resolve();
+		};
+		process.once("SIGINT", cleanup);
+		process.once("SIGTERM", cleanup);
+	});
+
+	unsubscribeRegistryUpdates();
+	for (const server of servers) {
+		server.dispose();
+	}
+	try {
+		await socketServer.close();
+		await runtimeHost.dispose();
+	} finally {
+		if (agentDir) {
+			removeRuntimeRegistryEntry(agentDir, runtimeId);
+		}
+	}
+}
+
+function createRegistryEntry(
+	runtimeHost: AgentSessionRuntime,
+	runtimeId: string,
+	socketPath: string,
+	createdAt: string,
+): RuntimeRegistryEntry {
+	const snapshot = runtimeHost.getSnapshot();
+	const now = new Date().toISOString();
+	return {
+		agentId: runtimeId,
+		socketPath,
+		pid: process.pid,
+		cwd: snapshot.agent.cwd,
+		sessionId: snapshot.session.sessionId,
+		sessionName: snapshot.session.sessionName,
+		status: snapshot.agent.status,
+		protocolVersion: snapshot.protocolVersion,
+		capabilities: [...snapshot.capabilities],
+		createdAt,
+		updatedAt: now,
+	};
 }

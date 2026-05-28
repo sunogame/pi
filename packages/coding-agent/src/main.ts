@@ -45,6 +45,8 @@ import { InteractiveMode, runPrintMode, runRpcMode, runRuntimeAttachMode, runRun
 import { ExtensionSelectorComponent } from "./modes/interactive/components/extension-selector.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
+import { handleRuntimeCommand } from "./runtime-cli.ts";
+import { handleSupervisorCommand } from "./supervisor-cli.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
 
@@ -443,6 +445,14 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
+	if (await handleRuntimeCommand(args)) {
+		return;
+	}
+
+	if (await handleSupervisorCommand(args)) {
+		return;
+	}
+
 	if (await handleConfigCommand(args)) {
 		return;
 	}
@@ -487,7 +497,7 @@ export async function main(args: string[], options?: MainOptions) {
 		(parsed.mode === "rpc" || parsed.mode === "runtime-ipc" || parsed.mode === "attach-ipc") &&
 		parsed.fileArgs.length > 0
 	) {
-		console.error(chalk.red("Error: @file arguments are not supported in RPC/runtime IPC modes"));
+		console.error(chalk.red("Error: @file arguments are not supported in RPC/runtime IPC/attach IPC modes"));
 		process.exit(1);
 	}
 
@@ -498,7 +508,11 @@ export async function main(args: string[], options?: MainOptions) {
 			printHelp();
 			process.exit(0);
 		}
-		await runRuntimeAttachMode(args);
+		await runRuntimeAttachMode(args, {
+			agentDir: getAgentDir(),
+			attach: parsed.attach,
+			runtimeSocket: parsed.runtimeSocket,
+		});
 		return;
 	}
 
@@ -632,6 +646,11 @@ export async function main(args: string[], options?: MainOptions) {
 		cwd: sessionManager.getCwd(),
 		agentDir,
 		sessionManager,
+		runtimeOptions: parsed.runtimeId
+			? {
+					identity: { agentId: parsed.runtimeId },
+				}
+			: undefined,
 	});
 	const { services, session, modelFallbackMessage } = runtime;
 	const { settingsManager, modelRegistry, resourceLoader } = services;
@@ -698,7 +717,11 @@ export async function main(args: string[], options?: MainOptions) {
 		await runRpcMode(runtime);
 	} else if (appMode === "runtime-ipc") {
 		printTimings();
-		await runRuntimeIpcMode(runtime);
+		await runRuntimeIpcMode(runtime, {
+			agentDir,
+			runtimeId: parsed.runtimeId,
+			socketPath: parsed.runtimeSocket,
+		});
 	} else if (appMode === "interactive") {
 		const interactiveMode = new InteractiveMode(runtime, {
 			migratedProviders,

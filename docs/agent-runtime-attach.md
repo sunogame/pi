@@ -32,13 +32,17 @@ The target model is closer to `tmux`:
   `--mode attach-ipc`, and validates reconnect/buffer-overflow replay behavior.
   The protocol baseline is defined in
   [Runtime IPC Protocol](./runtime-ipc-protocol.md).
-- **Phase 4 - Full TUI Attach:** in progress. Replaces the minimal
+- **Phase 4 - Full TUI Attach:** complete. Replaces the minimal
   `--mode attach-ipc` debug UI with the normal pi transcript/editor/status
   experience backed by `IpcRuntimeClient`. Local-only capabilities such as
   model/auth pickers and legacy extension surfaces stay hidden or disabled
   until they have serializable APIs.
-- **Phase 5 - Supervisor / Multi Runtime:** planned. Adds a supervisor,
-  runtime discovery, multi-agent attach switching, and service discovery.
+- **Phase 5 - Supervisor / Multi Runtime:** in progress. Phase 5a adds a
+  local runtime process registry. Phase 5b adds Unix socket transport for the
+  existing Runtime IPC protocol. Phase 5c adds runtime lifecycle commands.
+  Phase 5d/5f add attach-mode runtime switching and a multi-runtime status
+  strip. Phase 5e/5g add a lightweight supervisor config that can start a set
+  of local runtimes. pi-ent integration remains future Phase 5h work.
 
 ## Process Model
 
@@ -372,6 +376,79 @@ process-local transport/model mutation.
 
 Phase 4 does not include multi-agent discovery or attach switching. Those are
 Phase 5 supervisor responsibilities.
+
+Phase 5a/5b introduce a lower-level process discovery and socket attach path:
+
+```sh
+pi --mode runtime-ipc --runtime-id backend
+pi --mode attach-ipc --attach backend
+```
+
+The first command starts one long-running runtime, listens on a Unix socket,
+and writes a registry entry under the agent config directory. The second
+command looks up the registry entry and attaches a TUI client to that existing
+runtime. `--runtime-socket <path>` can be used on either side to bypass the
+default socket path or registry lookup.
+
+The registry is not the supervisor. It is a local discovery aid containing
+runtime id, pid, socket path, cwd, session id, protocol version, capabilities,
+and current status. Stale entries are removed when lookup finds a dead pid or
+missing socket. TUI exit detaches from socket-attached runtimes and does not
+shut them down; child-spawn attach mode still owns and terminates its child
+runtime.
+
+Phase 5c adds lifecycle commands:
+
+```sh
+pi runtime list
+pi runtime inspect backend
+pi runtime start backend --cwd ./backend --model sonnet --tools read,bash
+pi runtime stop backend
+```
+
+`runtime start` is a small local process manager: it starts a detached
+`--mode runtime-ipc --runtime-id <id>` process, waits for registry
+registration, and returns. `runtime stop` connects to the runtime socket and
+sends the IPC `shutdown` method.
+
+Phase 5d/5f make attach mode multi-runtime aware:
+
+```text
+/runtimes          show registered runtimes
+/attach backend    detach current runtime and attach backend
+/switch qa         alias for /attach qa
+/next              cycle to the next registered runtime
+/prev              cycle to the previous registered runtime
+```
+
+The attach TUI renders a compact runtime strip from the registry. Switching
+rebuilds the local snapshot/store from the newly attached runtime. Existing
+runtime processes keep running when the TUI exits.
+
+Phase 5e/5g add a lightweight supervisor config, intentionally separate from
+pi-ent:
+
+```json
+{
+  "runtimes": [
+    { "id": "backend", "cwd": "./backend", "model": "sonnet", "tools": ["read", "bash"] },
+    { "id": "qa", "cwd": "./qa", "args": ["--no-skills"] }
+  ]
+}
+```
+
+The default path is `.pi/runtimes.json`:
+
+```sh
+pi supervisor start
+pi supervisor status
+pi supervisor start --config ./runtimes.json
+```
+
+This is not yet the final long-running supervisor service. It is the first
+local supervisor layer: specs turn into detached runtime processes, registry
+entries remain the discovery mechanism, and attach-mode TUI can switch among
+those runtimes.
 
 ## Import Boundary
 

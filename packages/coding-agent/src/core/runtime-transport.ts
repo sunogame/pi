@@ -4,6 +4,7 @@ import { attachJsonlLineReader } from "./jsonl.ts";
 export interface RuntimeTransport {
 	send(line: string): Promise<void>;
 	onLine(cb: (line: string) => void): () => void;
+	onClose(cb: () => void): () => void;
 	close(): void;
 }
 
@@ -18,6 +19,7 @@ export class StreamRuntimeTransport implements RuntimeTransport {
 	private readonly input: Readable;
 	private readonly output: Writable;
 	private readonly listeners = new Set<(line: string) => void>();
+	private readonly closeListeners = new Set<() => void>();
 	private readonly detachReader: () => void;
 	private closed = false;
 
@@ -29,15 +31,9 @@ export class StreamRuntimeTransport implements RuntimeTransport {
 				listener(line);
 			}
 		});
-		input.once("end", () => {
-			this.closed = true;
-		});
-		input.once("close", () => {
-			this.closed = true;
-		});
-		output.once("close", () => {
-			this.closed = true;
-		});
+		input.once("end", () => this.markClosed());
+		input.once("close", () => this.markClosed());
+		output.once("close", () => this.markClosed());
 	}
 
 	async send(line: string): Promise<void> {
@@ -76,15 +72,38 @@ export class StreamRuntimeTransport implements RuntimeTransport {
 		};
 	}
 
+	onClose(cb: () => void): () => void {
+		if (this.closed) {
+			queueMicrotask(cb);
+			return () => {};
+		}
+		this.closeListeners.add(cb);
+		return () => {
+			this.closeListeners.delete(cb);
+		};
+	}
+
 	close(): void {
 		if (this.closed) {
 			return;
 		}
-		this.closed = true;
+		this.markClosed();
 		this.detachReader();
 		this.listeners.clear();
 		this.input.destroy();
 		this.output.end();
+	}
+
+	private markClosed(): void {
+		if (this.closed) {
+			return;
+		}
+		this.closed = true;
+		const listeners = [...this.closeListeners];
+		this.closeListeners.clear();
+		for (const listener of listeners) {
+			listener();
+		}
 	}
 }
 

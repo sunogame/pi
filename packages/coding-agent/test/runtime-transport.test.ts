@@ -1,5 +1,8 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
+import { connectRuntimeSocket, listenRuntimeSocket } from "../src/core/runtime-socket-transport.ts";
 import { createStreamRuntimeTransport, RuntimeTransportClosedError } from "../src/core/runtime-transport.ts";
 
 describe("StreamRuntimeTransport", () => {
@@ -54,5 +57,30 @@ describe("StreamRuntimeTransport", () => {
 		transport.close();
 
 		await expect(transport.send("late\n")).rejects.toBeInstanceOf(RuntimeTransportClosedError);
+	});
+
+	it("connects stream transports over a Unix socket", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+		const socketPath = join(tmpdir(), `pi-runtime-transport-${process.pid}-${Date.now()}.sock`);
+		let serverLine = "";
+		const server = await listenRuntimeSocket(socketPath, (transport) => {
+			transport.onLine((line) => {
+				serverLine = line;
+				void transport.send(`${line}-reply\n`);
+			});
+		});
+		const client = await connectRuntimeSocket(socketPath);
+		const reply = new Promise<string>((resolve) => {
+			client.onLine((line) => resolve(line));
+		});
+
+		await client.send("hello\n");
+		await expect(reply).resolves.toBe("hello-reply");
+
+		expect(serverLine).toBe("hello");
+		client.close();
+		await server.close();
 	});
 });

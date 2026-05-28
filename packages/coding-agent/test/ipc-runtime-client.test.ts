@@ -7,6 +7,7 @@ import type { RuntimeTransport } from "../src/core/runtime-transport.ts";
 class MockRuntimeTransport implements RuntimeTransport {
 	readonly sent: string[] = [];
 	private readonly listeners = new Set<(line: string) => void>();
+	private readonly closeListeners = new Set<() => void>();
 
 	async send(line: string): Promise<void> {
 		this.sent.push(line);
@@ -19,8 +20,19 @@ class MockRuntimeTransport implements RuntimeTransport {
 		};
 	}
 
+	onClose(cb: () => void): () => void {
+		this.closeListeners.add(cb);
+		return () => {
+			this.closeListeners.delete(cb);
+		};
+	}
+
 	close(): void {
 		this.listeners.clear();
+		for (const listener of this.closeListeners) {
+			listener();
+		}
+		this.closeListeners.clear();
 	}
 
 	emit(value: unknown): void {

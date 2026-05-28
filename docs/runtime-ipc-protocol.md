@@ -16,13 +16,27 @@ The baseline CLI implementation has two process roles:
   components where protocol data is available, and sends prompts, aborts, and
   runtime commands over IPC.
 
+Phase 5a/5b add a local registry and Unix socket transport without changing the
+JSONL method/event protocol:
+
+- `--mode runtime-ipc --runtime-id <id>` starts a long-running runtime socket
+  server and registers it under `<agentDir>/runtimes/<id>.json`.
+- `--mode runtime-ipc --runtime-id <id> --runtime-socket <path>` uses an
+  explicit socket path instead of the default registry path.
+- `--mode attach-ipc --attach <id>` looks up the registry entry and connects
+  to the existing runtime over its Unix socket.
+- `--mode attach-ipc --runtime-socket <path>` connects directly to a socket
+  and bypasses registry lookup.
+- `--mode attach-ipc` with no attach target keeps the Phase 3 behavior:
+  spawn a child stdio runtime and own its lifetime.
+
 `--mode attach-ipc` is intentionally capability-gated: model/auth pickers,
 legacy extension UI, and local-only callbacks stay out of the IPC path until
 they have explicit serializable APIs.
 
 ## Transport
 
-Phase 3 uses a line-oriented JSON transport. Stdio and Unix sockets should both
+The protocol uses a line-oriented JSON transport. Stdio and Unix sockets both
 implement the same abstraction:
 
 ```ts
@@ -52,6 +66,36 @@ type RuntimeIpcNotification =
   | { type: "shutdown"; reason?: string };
 ```
 
+Socket attach is detach-only from the TUI side: closing the client transport
+does not shut down the runtime process. Child-spawn attach mode is different:
+the TUI owns the child stdio runtime and terminates it when the TUI exits.
+
+## Runtime Registry
+
+The local registry is an implementation detail for discovery. A registry entry
+is a JSON file keyed by runtime id:
+
+```ts
+type RuntimeRegistryEntry = {
+  agentId: string;
+  socketPath: string;
+  pid: number;
+  cwd: string;
+  sessionId: string;
+  sessionName?: string;
+  status: AgentRuntimeStatus;
+  protocolVersion: number;
+  capabilities: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+```
+
+Lookup must treat the entry as stale if the pid is no longer alive or the
+socket path is missing, remove it, and report the runtime as unavailable. The
+registry is not authoritative runtime state; the attached snapshot remains the
+source of truth.
+
 ## Baseline Methods
 
 These methods are the Phase 3 IPC-safe `RuntimeClient` surface:
@@ -65,6 +109,7 @@ These methods are the Phase 3 IPC-safe `RuntimeClient` surface:
 | `waitForIdle` | none | `{}` |
 | `executeCommand` | `{ name: string; args: string }` | `{ handled: boolean }` |
 | `getSnapshot` | none | `{ snapshot: AgentRuntimeSnapshot }` |
+| `shutdown` | none | `{}` |
 
 The IPC `attach` response cannot include an `unsubscribe` function. The client
 detaches by sending `detach` or closing the transport.
@@ -73,6 +118,10 @@ detaches by sending `detach` or closing the transport.
 it after events such as `transcript_changed`, where the event identifies that a
 fresh authoritative snapshot is required but does not carry the full
 transcript.
+
+`shutdown` asks the runtime process to terminate gracefully. Attach-mode TUI
+does not call it on normal exit; lifecycle commands such as
+`pi runtime stop <id>` do.
 
 ## Capabilities
 

@@ -14,16 +14,20 @@ import type { RuntimeTransport } from "./runtime-transport.ts";
 export class RuntimeIpcServer {
 	private readonly runtime: AgentSessionRuntime;
 	private readonly transport: RuntimeTransport;
+	private readonly onShutdown?: () => void;
 	private readonly unsubscribeTransport: () => void;
+	private readonly unsubscribeTransportClose: () => void;
 	private unsubscribeRuntimeEvents?: () => void;
 	private disposed = false;
 
-	constructor(runtime: AgentSessionRuntime, transport: RuntimeTransport) {
+	constructor(runtime: AgentSessionRuntime, transport: RuntimeTransport, options: { onShutdown?: () => void } = {}) {
 		this.runtime = runtime;
 		this.transport = transport;
+		this.onShutdown = options.onShutdown;
 		this.unsubscribeTransport = transport.onLine((line) => {
 			void this.handleLine(line);
 		});
+		this.unsubscribeTransportClose = transport.onClose(() => this.dispose());
 	}
 
 	dispose(): void {
@@ -32,6 +36,7 @@ export class RuntimeIpcServer {
 		}
 		this.disposed = true;
 		this.unsubscribeTransport();
+		this.unsubscribeTransportClose();
 		this.unsubscribeRuntimeEvents?.();
 		this.unsubscribeRuntimeEvents = undefined;
 		this.transport.close();
@@ -107,6 +112,9 @@ export class RuntimeIpcServer {
 			}
 			case "getSnapshot":
 				return { snapshot: this.runtime.getSnapshot() };
+			case "shutdown":
+				setTimeout(() => this.onShutdown?.(), 0);
+				return {};
 			default:
 				throw {
 					code: "unknown_method",
@@ -124,8 +132,12 @@ export class RuntimeIpcServer {
 	}
 }
 
-export function createRuntimeIpcServer(runtime: AgentSessionRuntime, transport: RuntimeTransport): RuntimeIpcServer {
-	return new RuntimeIpcServer(runtime, transport);
+export function createRuntimeIpcServer(
+	runtime: AgentSessionRuntime,
+	transport: RuntimeTransport,
+	options?: { onShutdown?: () => void },
+): RuntimeIpcServer {
+	return new RuntimeIpcServer(runtime, transport, options);
 }
 
 function readObjectParams(params: unknown): Record<string, unknown> {

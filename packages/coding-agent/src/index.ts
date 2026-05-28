@@ -240,6 +240,23 @@ export {
 } from "./core/runtime-ipc.ts";
 export { createRuntimeIpcServer, RuntimeIpcServer } from "./core/runtime-ipc-server.ts";
 export {
+	getDefaultRuntimeSocketPath,
+	getRuntimeRegistryDir,
+	getRuntimeRegistryPath,
+	isProcessAlive,
+	listRuntimeRegistryEntries,
+	type RuntimeRegistryEntry,
+	readRuntimeRegistryEntry,
+	removeRuntimeRegistryEntry,
+	sanitizeRuntimeId,
+	writeRuntimeRegistryEntry,
+} from "./core/runtime-registry.ts";
+export {
+	connectRuntimeSocket,
+	listenRuntimeSocket,
+	type RuntimeSocketServer,
+} from "./core/runtime-socket-transport.ts";
+export {
 	createStreamRuntimeTransport,
 	type RuntimeTransport,
 	RuntimeTransportClosedError,
