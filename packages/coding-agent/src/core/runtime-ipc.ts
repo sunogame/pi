@@ -11,6 +11,7 @@ export type RuntimeIpcMethod =
 	| "executeCommand"
 	| "newSession"
 	| "compact"
+	| "reload"
 	| "stopMonitor"
 	| "getSnapshot"
 	| "shutdown"
@@ -29,6 +30,7 @@ export type RuntimeIpcRequestParams = {
 	executeCommand: { name: string; args: string };
 	newSession: undefined;
 	compact: { customInstructions?: string };
+	reload: undefined;
 	stopMonitor: { id: string };
 	getSnapshot: undefined;
 	shutdown: undefined;
@@ -46,6 +48,7 @@ export type RuntimeIpcResult = {
 	executeCommand: { handled: boolean };
 	newSession: { cancelled: boolean };
 	compact: { result: unknown };
+	reload: Record<string, never>;
 	stopMonitor: { stopped: boolean };
 	getSnapshot: { snapshot: AgentRuntimeSnapshot };
 	shutdown: Record<string, never>;

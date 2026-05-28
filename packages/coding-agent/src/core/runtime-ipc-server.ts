@@ -136,6 +136,9 @@ export class RuntimeIpcServer {
 				const result = await this.runtime.session.compact(customInstructions);
 				return { result };
 			}
+			case "reload":
+				await this.runtime.session.reload();
+				return {};
 			case "stopMonitor": {
 				const params = readObjectParams(request.params);
 				if (typeof params.id !== "string" || params.id.trim().length === 0) {

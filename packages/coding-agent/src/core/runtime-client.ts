@@ -44,6 +44,7 @@ export interface RuntimeClient {
 	executeCommand(name: string, args: string): Promise<boolean>;
 	newSession(options?: RuntimeNewSessionOptions): Promise<{ cancelled: boolean }>;
 	compact(customInstructions?: string): Promise<RuntimeCompactionResult>;
+	reload(): Promise<void>;
 	stopMonitor(id: string): Promise<boolean>;
 }
 
@@ -75,7 +76,6 @@ export interface LocalRuntimeClient extends RuntimeClient {
 	abortCompaction(): Promise<void>;
 	abortRetry(): Promise<void>;
 	abortBranchSummary(): Promise<void>;
-	reload(): Promise<void>;
 	exportToJsonl(outputPath?: string): Promise<string>;
 	exportToHtml(outputPath?: string): Promise<string>;
 	getLastAssistantText(): Promise<string | undefined>;

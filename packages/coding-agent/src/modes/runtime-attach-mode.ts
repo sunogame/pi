@@ -62,13 +62,11 @@ export const ATTACH_LOCAL_COMMANDS: SlashCommand[] = [
 	{ name: "attach", description: "Attach to a registered runtime" },
 	{ name: "runtimes", description: "List registered runtimes" },
 	{ name: "broadcast", description: "Send a prompt to all registered runtimes" },
-	{ name: "clear", description: "Start a new session for the attached runtime" },
-	{ name: "clear-all", description: "Start a new session for all registered runtimes" },
+	{ name: "new", description: "Start a new session for the attached runtime" },
+	{ name: "new-all", description: "Start a new session for all registered runtimes" },
 	{ name: "compact", description: "Compact the attached runtime context" },
-	{ name: "monitors", description: "List monitors for the attached runtime" },
-	{ name: "monitor-stop", description: "Stop a monitor by id" },
+	{ name: "reload", description: "Reload the attached runtime resources" },
 	{ name: "abort", description: "Abort the current runtime run" },
-	{ name: "exit", description: "Detach this TUI" },
 	{ name: "quit", description: "Detach this TUI" },
 ];
 
@@ -290,7 +288,7 @@ class RuntimeAttachView {
 		this.editor.addToHistory(text);
 		this.editor.setText("");
 
-		if (trimmed === "/exit" || trimmed === "/quit") {
+		if (trimmed === "/quit" || trimmed === "/exit") {
 			this.finish?.();
 			return;
 		}
@@ -300,6 +298,10 @@ class RuntimeAttachView {
 		}
 		if (trimmed.startsWith("/")) {
 			if (await this.executeAttachCommand(trimmed)) {
+				return;
+			}
+			if (this.isRuntimePromptCommand(trimmed)) {
+				await this.client.prompt(trimmed).catch((error: unknown) => this.setError(error));
 				return;
 			}
 			await this.executeRuntimeCommand(trimmed);
@@ -333,16 +335,20 @@ class RuntimeAttachView {
 			await this.broadcast(command.args.trim());
 			return true;
 		}
-		if (command.name === "clear") {
+		if (command.name === "new" || command.name === "clear") {
 			await this.clearRuntime();
 			return true;
 		}
-		if (command.name === "clear-all") {
+		if (command.name === "new-all" || command.name === "clear-all") {
 			await this.clearAllRuntimes();
 			return true;
 		}
 		if (command.name === "compact") {
 			await this.compactRuntime(command.args.trim());
+			return true;
+		}
+		if (command.name === "reload") {
+			await this.reloadRuntime();
 			return true;
 		}
 		if (command.name === "monitors") {
@@ -425,6 +431,18 @@ class RuntimeAttachView {
 		try {
 			await this.client.compact(customInstructions.length > 0 ? customInstructions : undefined);
 			this.showStatusMessage(theme.fg("accent", `compacted ${this.client.store.snapshot.agent.agentId}`));
+		} catch (error) {
+			this.setError(error);
+		}
+	}
+
+	private async reloadRuntime(): Promise<void> {
+		this.lastError = undefined;
+		try {
+			await this.client.reload();
+			this.setupAutocompleteProvider(this.client.store.snapshot);
+			this.renderSnapshot(this.client.store.snapshot);
+			this.showStatusMessage(theme.fg("accent", `reloaded ${this.client.store.snapshot.agent.agentId}`));
 		} catch (error) {
 			this.setError(error);
 		}
@@ -583,7 +601,7 @@ class RuntimeAttachView {
 		this.renderRuntimeStatus(snapshot, statusParts.join("  "));
 		this.help.setText(
 			chalk.dim(
-				"Enter sends prompt. Esc aborts. Alt+Right/Left cycles runtimes. /clear starts a new session. /compact compacts. /exit quits.",
+				"Enter sends prompt. Esc aborts. Alt+Right/Left cycles runtimes. /new starts a new session. /compact compacts. /quit detaches.",
 			),
 		);
 		this.tui.requestRender();
@@ -687,15 +705,46 @@ class RuntimeAttachView {
 
 	private setupAutocompleteProvider(snapshot: AgentRuntimeSnapshot): void {
 		const localCommandNames = new Set(ATTACH_LOCAL_COMMANDS.map((command) => command.name));
+		const templateCommands: SlashCommand[] = snapshot.resources.promptTemplates.map((template) => ({
+			name: template.name,
+			description: template.argumentHint ? `${template.description} ${template.argumentHint}` : template.description,
+		}));
+		const skillCommands: SlashCommand[] = snapshot.resources.skills.map((skill) => ({
+			name: `skill:${skill.name}`,
+			description: skill.description,
+		}));
+		const promptCommandNames = new Set([
+			...templateCommands.map((command) => command.name),
+			...skillCommands.map((command) => command.name),
+		]);
 		const commands: SlashCommand[] = snapshot.commands
-			.filter((command) => command.placement === "runtime" && !localCommandNames.has(command.invocationName))
+			.filter(
+				(command) =>
+					command.placement === "runtime" &&
+					!localCommandNames.has(command.invocationName) &&
+					!promptCommandNames.has(command.invocationName),
+			)
 			.map((command) => ({
 				name: command.invocationName,
 				description: command.description,
 			}));
 		this.editor.setAutocompleteProvider(
-			new CombinedAutocompleteProvider([...ATTACH_LOCAL_COMMANDS, ...commands], snapshot.agent.cwd),
+			new CombinedAutocompleteProvider(
+				[...ATTACH_LOCAL_COMMANDS, ...templateCommands, ...skillCommands, ...commands],
+				snapshot.agent.cwd,
+			),
 		);
+	}
+
+	private isRuntimePromptCommand(input: string): boolean {
+		const command = parseRuntimeCommand(input);
+		if (!command) {
+			return false;
+		}
+		if (command.name.startsWith("skill:")) {
+			return this.client.store.snapshot.resources.skills.some((skill) => `skill:${skill.name}` === command.name);
+		}
+		return this.client.store.snapshot.resources.promptTemplates.some((template) => template.name === command.name);
 	}
 
 	private handleRuntimeEvent(event: AgentRuntimeEvent, snapshot: AgentRuntimeSnapshot): void {

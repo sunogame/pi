@@ -111,6 +111,11 @@ export class IpcRuntimeClient implements RuntimeClient {
 		return result.result as RuntimeCompactionResult;
 	}
 
+	async reload(): Promise<void> {
+		await this.request("reload", undefined);
+		await this.refreshFromRuntime();
+	}
+
 	async stopMonitor(id: string): Promise<boolean> {
 		const result = await this.request("stopMonitor", { id });
 		await this.refreshFromRuntime();
