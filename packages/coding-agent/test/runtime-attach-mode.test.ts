@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseRuntimeCommand, toRuntimeIpcArgs } from "../src/modes/runtime-attach-mode.ts";
+import { ATTACH_LOCAL_COMMANDS, parseRuntimeCommand, toRuntimeIpcArgs } from "../src/modes/runtime-attach-mode.ts";
 
 describe("runtime attach mode", () => {
 	test("rewrites attach-ipc mode to runtime-ipc for child process", () => {
@@ -25,5 +25,14 @@ describe("runtime attach mode", () => {
 			args: "",
 		});
 		expect(parseRuntimeCommand("plain prompt")).toBeUndefined();
+	});
+
+	test("exposes attach-local slash commands for autocomplete", () => {
+		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).toEqual(
+			expect.arrayContaining(["attach", "runtimes", "broadcast", "abort", "exit", "quit"]),
+		);
+		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).not.toContain("switch");
+		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).not.toContain("next");
+		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).not.toContain("prev");
 	});
 });

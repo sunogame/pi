@@ -30,9 +30,6 @@ pi --mode attach-ipc --attach backend
 ```text
 /runtimes          显示已注册 runtime
 /attach backend    attach 到指定 runtime
-/switch qa         /attach qa 的别名
-/next              切到下一个已注册 runtime
-/prev              切到上一个已注册 runtime
 /broadcast ...     给所有已注册 runtime 发送同一个 prompt
 /exit              detach 当前 TUI
 ```
@@ -178,10 +175,14 @@ attach TUI 会从 registry 渲染一个简洁的 runtime strip。当前 runtime 
 ```text
 /runtimes
 /attach <id>
-/switch <id>
-/next
-/prev
 /broadcast <message>
+```
+
+快捷键：
+
+```text
+Alt+Right          attach 下一个已注册 runtime
+Alt+Left           attach 上一个已注册 runtime
 ```
 
 切换流程：
@@ -211,7 +212,7 @@ attach TUI 会从 registry 渲染一个简洁的 runtime strip。当前 runtime 
 - 在当前 TUI 显示 delivered/failed runtime ids；
 - 不等待所有 runtime 回复完成。
 
-每个 runtime 的回复会留在自己的 transcript 里。用 `/attach <id>`、`/next` 或 `/prev` 查看各自回复。
+每个 runtime 的回复会留在自己的 transcript 里。用 `/attach <id>` 或 `Alt+Right`/`Alt+Left` 查看各自回复。
 
 ## 停止 Runtime
 
@@ -307,7 +308,7 @@ pi runtime list
 pi --mode attach-ipc --attach backend
 ```
 
-然后在 TUI 内用 `/next`、`/prev` 或 `/attach <id>` 切换。
+然后在 TUI 内用 `Alt+Right`、`Alt+Left` 或 `/attach <id>` 切换。
 
 ## 当前限制
 

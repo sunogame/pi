@@ -420,10 +420,9 @@ Phase 5d/5f make attach mode multi-runtime aware:
 ```text
 /runtimes          show registered runtimes
 /attach backend    detach current runtime and attach backend
-/switch qa         alias for /attach qa
-/next              cycle to the next registered runtime
-/prev              cycle to the previous registered runtime
 ```
+
+`Alt+Right` and `Alt+Left` cycle between registered runtimes.
 
 The attach TUI renders a compact runtime strip from the registry. Switching
 rebuilds the local snapshot/store from the newly attached runtime. Existing

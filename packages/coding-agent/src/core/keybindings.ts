@@ -26,6 +26,8 @@ export interface AppKeybindings {
 	"app.message.followUp": true;
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
+	"app.runtime.next": true;
+	"app.runtime.prev": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -107,6 +109,8 @@ export const KEYBINDINGS = {
 		defaultKeys: process.platform === "win32" ? "alt+v" : "ctrl+v",
 		description: "Paste image from clipboard",
 	},
+	"app.runtime.next": { defaultKeys: "alt+right", description: "Attach next runtime" },
+	"app.runtime.prev": { defaultKeys: "alt+left", description: "Attach previous runtime" },
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
 	"app.session.fork": { defaultKeys: [], description: "Fork current session" },

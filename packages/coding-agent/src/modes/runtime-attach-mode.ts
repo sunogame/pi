@@ -54,6 +54,15 @@ export interface RuntimeBroadcastResult {
 	failed: Array<{ agentId: string; error: string }>;
 }
 
+export const ATTACH_LOCAL_COMMANDS: SlashCommand[] = [
+	{ name: "attach", description: "Attach to a registered runtime" },
+	{ name: "runtimes", description: "List registered runtimes" },
+	{ name: "broadcast", description: "Send a prompt to all registered runtimes" },
+	{ name: "abort", description: "Abort the current runtime run" },
+	{ name: "exit", description: "Detach this TUI" },
+	{ name: "quit", description: "Detach this TUI" },
+];
+
 export async function runRuntimeAttachMode(
 	args: readonly string[] = process.argv.slice(2),
 	options: RuntimeAttachModeOptions = {},
@@ -194,6 +203,12 @@ class RuntimeAttachView {
 			this.transcript.updateOptions({ hideThinkingBlock: this.hideThinkingBlock });
 			this.transcript.renderSnapshot(this.client.store.snapshot);
 		});
+		this.editor.onAction("app.runtime.next", () => {
+			void this.switchAdjacentRuntime(1);
+		});
+		this.editor.onAction("app.runtime.prev", () => {
+			void this.switchAdjacentRuntime(-1);
+		});
 
 		this.root.addChild(this.header);
 		this.root.addChild(this.runtimeBar);
@@ -289,17 +304,13 @@ class RuntimeAttachView {
 		if (!command) {
 			return false;
 		}
-		if (command.name === "attach" || command.name === "switch") {
+		if (command.name === "attach") {
 			const runtimeId = command.args.trim();
 			if (!runtimeId) {
 				this.showRuntimeList();
 				return true;
 			}
 			await this.switchRuntime(runtimeId);
-			return true;
-		}
-		if (command.name === "next" || command.name === "prev") {
-			await this.switchAdjacentRuntime(command.name === "next" ? 1 : -1);
 			return true;
 		}
 		if (command.name === "runtimes") {
@@ -461,7 +472,7 @@ class RuntimeAttachView {
 		this.renderRuntimeStatus(snapshot, statusParts.join("  "));
 		this.help.setText(
 			chalk.dim(
-				"Enter sends prompt. Esc aborts. /attach <id> switches. /next cycles. /runtimes lists. /exit quits.",
+				"Enter sends prompt. Esc aborts. Alt+Right/Left cycles runtimes. /attach <id> switches. /runtimes lists. /exit quits.",
 			),
 		);
 		this.tui.requestRender();
@@ -568,13 +579,16 @@ class RuntimeAttachView {
 	}
 
 	private setupAutocompleteProvider(snapshot: AgentRuntimeSnapshot): void {
+		const localCommandNames = new Set(ATTACH_LOCAL_COMMANDS.map((command) => command.name));
 		const commands: SlashCommand[] = snapshot.commands
-			.filter((command) => command.placement === "runtime")
+			.filter((command) => command.placement === "runtime" && !localCommandNames.has(command.invocationName))
 			.map((command) => ({
 				name: command.invocationName,
 				description: command.description,
 			}));
-		this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, snapshot.agent.cwd));
+		this.editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider([...ATTACH_LOCAL_COMMANDS, ...commands], snapshot.agent.cwd),
+		);
 	}
 
 	private handleRuntimeEvent(event: AgentRuntimeEvent, snapshot: AgentRuntimeSnapshot): void {

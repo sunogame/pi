@@ -32,9 +32,6 @@ Inside the attach TUI:
 ```text
 /runtimes          show registered runtimes
 /attach backend    attach a specific runtime
-/switch qa         alias for /attach qa
-/next              cycle to the next registered runtime
-/prev              cycle to the previous registered runtime
 /broadcast ...     send one prompt to all registered runtimes
 /exit              detach this TUI
 ```
@@ -189,10 +186,14 @@ Commands:
 ```text
 /runtimes
 /attach <id>
-/switch <id>
-/next
-/prev
 /broadcast <message>
+```
+
+Shortcuts:
+
+```text
+Alt+Right          attach the next registered runtime
+Alt+Left           attach the previous registered runtime
 ```
 
 Switching does this:
@@ -223,8 +224,8 @@ Broadcast currently has simple fire-and-forget semantics:
 - show delivered/failed runtime ids in the current TUI;
 - do not wait for all replies.
 
-Each runtime's reply stays in its own transcript. Use `/attach <id>`, `/next`,
-or `/prev` to inspect individual replies.
+Each runtime's reply stays in its own transcript. Use `/attach <id>` or
+`Alt+Right`/`Alt+Left` to inspect individual replies.
 
 ## Stopping Runtimes
 
@@ -323,7 +324,7 @@ pi runtime list
 pi --mode attach-ipc --attach backend
 ```
 
-Then use `/next`, `/prev`, or `/attach <id>` inside the TUI.
+Then use `Alt+Right`, `Alt+Left`, or `/attach <id>` inside the TUI.
 
 ## Current Limitations
 
