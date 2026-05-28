@@ -179,9 +179,18 @@ describe("RuntimeIpcServer", () => {
 
 		expect(task.status.state).toBe("completed");
 		expect(task.artifacts?.[0]?.parts[0]).toEqual({ kind: "text", text: "backend answer" });
-		await expect(client.a2aGetTask({ id: task.id })).resolves.toMatchObject({
+		expect(task.history).toBeUndefined();
+		expect(task.metadata).toMatchObject({ historyOmitted: true, historyLength: 3 });
+		const fetched = await client.a2aGetTask({ id: task.id });
+		expect(fetched).toMatchObject({
 			id: task.id,
 			status: { state: "completed" },
+			metadata: expect.objectContaining({ historyOmitted: true, historyLength: 3 }),
+		});
+		expect(fetched.history).toBeUndefined();
+		await expect(client.a2aGetTask({ id: task.id, historyLength: 1 })).resolves.toMatchObject({
+			id: task.id,
+			history: [{ role: "agent" }],
 		});
 		client.close();
 	});
@@ -226,6 +235,49 @@ describe("RuntimeIpcServer", () => {
 		const canceled = await client.a2aCancelTask({ id: second.id });
 		expect(canceled.status.state).toBe("canceled");
 		expect(runtime.abort).not.toHaveBeenCalled();
+
+		releasePrompt?.();
+		await tick();
+		client.close();
+	});
+
+	it("does not block on queued local A2A tasks even when blocking is true", async () => {
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle"));
+		let releasePrompt: (() => void) | undefined;
+		runtime.prompt.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					releasePrompt = resolve;
+				}),
+		);
+		createRuntimeIpcServer(runtime.host, serverTransport);
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		const first = await client.a2aSendMessage({
+			message: {
+				kind: "message",
+				messageId: "msg-1",
+				role: "user",
+				parts: [{ kind: "text", text: "first" }],
+			},
+			configuration: { blocking: false },
+		});
+		await tick();
+		await expect(client.a2aGetTask({ id: first.id })).resolves.toMatchObject({ status: { state: "working" } });
+
+		const second = await client.a2aSendMessage({
+			message: {
+				kind: "message",
+				messageId: "msg-2",
+				role: "user",
+				parts: [{ kind: "text", text: "second" }],
+			},
+			configuration: { blocking: true },
+		});
+
+		expect(second.status.state).toBe("submitted");
+		expect(runtime.prompt).toHaveBeenCalledTimes(1);
 
 		releasePrompt?.();
 		await tick();

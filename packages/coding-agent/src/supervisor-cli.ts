@@ -78,7 +78,7 @@ export function runtimeSpecToStartOptions(
 		const state = readRuntimeStateEntry(agentDir, spec.id);
 		if (state?.sessionFile && existsSync(state.sessionFile)) {
 			runtimeArgs.push("--session", state.sessionFile);
-		} else {
+		} else if (!state) {
 			runtimeArgs.push("--continue");
 		}
 	}
@@ -102,9 +102,7 @@ export function runtimeSpecToStartOptions(
 async function startSupervisor(configPath: string): Promise<void> {
 	const config = loadSupervisorConfig(configPath);
 	validateSupervisorAgentCardNames(config);
-	for (const spec of config.runtimes) {
-		await startRuntime(runtimeSpecToStartOptions(spec, configPath));
-	}
+	await startSupervisorRuntimes(config, configPath);
 }
 
 async function restartSupervisor(configPath: string): Promise<void> {
@@ -121,8 +119,22 @@ async function restartSupervisor(configPath: string): Promise<void> {
 			);
 		}
 	}
+	await startSupervisorRuntimes(config, configPath);
+}
+
+async function startSupervisorRuntimes(config: SupervisorConfig, configPath: string): Promise<void> {
+	const errors: string[] = [];
 	for (const spec of config.runtimes) {
-		await startRuntime(runtimeSpecToStartOptions(spec, configPath));
+		try {
+			await startRuntime(runtimeSpecToStartOptions(spec, configPath));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			errors.push(`${spec.id}: ${message}`);
+			console.error(chalk.red(`Runtime "${spec.id}" was not started: ${message}`));
+		}
+	}
+	if (errors.length > 0) {
+		throw new Error(`Failed to start ${errors.length} runtime(s): ${errors.join("; ")}`);
 	}
 }
 

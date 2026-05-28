@@ -175,9 +175,9 @@ export async function startRuntime(options: RuntimeStartOptions): Promise<Runtim
 		stdio: "ignore",
 	});
 	child.unref();
-	const entry = await waitForRuntimeEntry(getAgentDir(), options.agentId, 3000);
+	const entry = await waitForRuntimeEntryOrExit(getAgentDir(), options.agentId, 10_000, child);
 	if (!entry) {
-		throw new Error(`Started runtime "${options.agentId}" but it did not register within 3s`);
+		throw new Error(`Started runtime "${options.agentId}" but it did not register within 10s`);
 	}
 	console.log(`Started runtime "${options.agentId}" pid=${entry.pid} socket=${entry.socketPath}`);
 	return entry;
@@ -207,16 +207,27 @@ export function parseRuntimeStartArgs(args: string[]): RuntimeStartOptions {
 	return { agentId, cwd, socketPath, runtimeArgs };
 }
 
-async function waitForRuntimeEntry(
+async function waitForRuntimeEntryOrExit(
 	agentDir: string,
 	agentId: string,
 	timeoutMs: number,
+	child: ReturnType<typeof spawn>,
 ): Promise<RuntimeRegistryEntry | undefined> {
+	let exited: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+	child.once("exit", (code, signal) => {
+		exited = { code, signal };
+	});
+
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		const entry = readRuntimeRegistryEntry(agentDir, agentId);
 		if (entry) {
 			return entry;
+		}
+		if (exited) {
+			throw new Error(
+				`Runtime "${agentId}" exited before registering (code=${exited.code ?? "null"} signal=${exited.signal ?? "null"})`,
+			);
 		}
 		await delay(100);
 	}

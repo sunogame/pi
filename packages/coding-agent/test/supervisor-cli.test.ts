@@ -9,15 +9,20 @@ import {
 } from "../src/supervisor-cli.ts";
 
 describe("supervisor CLI", () => {
-	it("converts runtime specs to runtime start options", () => {
-		const options = runtimeSpecToStartOptions({
-			id: "backend",
-			cwd: "./backend",
-			model: "sonnet",
-			tools: ["read", "bash"],
-			args: ["--no-skills"],
-			socketPath: "/tmp/backend.sock",
-		});
+	it("converts runtime specs to runtime start options", ({ task }) => {
+		const agentDir = join("/tmp", `pi-supervisor-default-${task.id}`, ".pi");
+		const options = runtimeSpecToStartOptions(
+			{
+				id: "backend",
+				cwd: "./backend",
+				model: "sonnet",
+				tools: ["read", "bash"],
+				args: ["--no-skills"],
+				socketPath: "/tmp/backend.sock",
+			},
+			undefined,
+			agentDir,
+		);
 
 		expect(options.agentId).toBe("backend");
 		expect(options.cwd).toMatch(/backend$/);
@@ -25,13 +30,15 @@ describe("supervisor CLI", () => {
 		expect(options.runtimeArgs).toEqual(["--no-skills", "--continue", "--model", "sonnet", "--tools", "read,bash"]);
 	});
 
-	it("passes team config metadata to runtime processes", () => {
+	it("passes team config metadata to runtime processes", ({ task }) => {
+		const agentDir = join("/tmp", `pi-supervisor-team-${task.id}`, ".pi");
 		const options = runtimeSpecToStartOptions(
 			{
 				id: "backend",
 				cwd: "./backend",
 			},
 			"/work/.pi/runtimes.json",
+			agentDir,
 		);
 
 		expect(options.runtimeArgs).toEqual([
@@ -77,6 +84,30 @@ describe("supervisor CLI", () => {
 		);
 
 		expect(options.runtimeArgs).toEqual(["--session", sessionFile]);
+	});
+
+	it("does not continue an old session when persisted runtime session file is missing", ({ task }) => {
+		const root = join("/tmp", `pi-supervisor-missing-state-${task.id}`);
+		const agentDir = join(root, ".pi");
+		const sessionFile = join(root, "sessions", "cleared-but-empty.jsonl");
+		writeRuntimeStateEntry(agentDir, {
+			agentId: "backend",
+			cwd: root,
+			sessionId: "cleared",
+			sessionFile,
+			updatedAt: new Date().toISOString(),
+		});
+
+		const options = runtimeSpecToStartOptions(
+			{
+				id: "backend",
+				cwd: "./backend",
+			},
+			undefined,
+			agentDir,
+		);
+
+		expect(options.runtimeArgs).toEqual([]);
 	});
 
 	it("documents supervisor restart in help output", async () => {

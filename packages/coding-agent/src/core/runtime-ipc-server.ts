@@ -18,6 +18,7 @@ interface A2ARuntimeState {
 	tasks: Map<string, A2ATask>;
 	queue: Promise<void>;
 	activeTaskId?: string;
+	submittedTaskIds: Set<string>;
 }
 
 const DEFAULT_A2A_SEND_TIMEOUT_MS = 5 * 60 * 1000;
@@ -164,13 +165,14 @@ export class RuntimeIpcServer {
 					from,
 				});
 				this.getA2ATasks().set(task.id, task);
+				const shouldBlock = params.configuration?.blocking !== false && this.canStartA2ATaskImmediately();
 				const runPromise = this.enqueueA2ATask(task, params.message, from);
-				if (params.configuration?.blocking === false) {
+				if (!shouldBlock) {
 					void runPromise;
 				} else {
 					await settleOrTimeout(runPromise, params.configuration?.timeoutMs ?? DEFAULT_A2A_SEND_TIMEOUT_MS);
 				}
-				return { task };
+				return { task: omitA2ATaskHistory(task, "a2a/message/send") };
 			}
 			case "a2a/tasks/get": {
 				const params = readObjectParams(request.params) as unknown as A2ATaskQueryParams;
@@ -203,7 +205,7 @@ export class RuntimeIpcServer {
 						task.history = [...(task.history ?? []), statusMessage];
 					}
 				}
-				return { task };
+				return { task: omitA2ATaskHistory(task, "a2a/tasks/cancel") };
 			}
 			default:
 				throw {
@@ -228,7 +230,7 @@ export class RuntimeIpcServer {
 	private getA2AState(): A2ARuntimeState {
 		let state = a2aStateByRuntime.get(this.runtime);
 		if (!state) {
-			state = { tasks: new Map(), queue: Promise.resolve() };
+			state = { tasks: new Map(), queue: Promise.resolve(), submittedTaskIds: new Set() };
 			a2aStateByRuntime.set(this.runtime, state);
 		}
 		return state;
@@ -237,9 +239,9 @@ export class RuntimeIpcServer {
 	private getA2ATask(id: string, historyLength?: number): A2ATask {
 		const task = this.getExistingA2ATask(id);
 		if (historyLength !== undefined && historyLength >= 0 && task.history) {
-			return { ...task, history: task.history.slice(-historyLength) };
+			return { ...task, history: historyLength === 0 ? [] : task.history.slice(-historyLength) };
 		}
-		return task;
+		return omitA2ATaskHistory(task, "a2a/tasks/get");
 	}
 
 	private getExistingA2ATask(id: string): A2ATask {
@@ -250,16 +252,32 @@ export class RuntimeIpcServer {
 		return task;
 	}
 
+	private canStartA2ATaskImmediately(): boolean {
+		const state = this.getA2AState();
+		const snapshot = this.runtime.getSnapshot();
+		return (
+			state.activeTaskId === undefined &&
+			state.submittedTaskIds.size === 0 &&
+			snapshot.agent.status === "idle" &&
+			!snapshot.run.isStreaming &&
+			!snapshot.run.isBashRunning
+		);
+	}
+
 	private enqueueA2ATask(task: A2ATask, message: A2AMessage, from: string | undefined): Promise<void> {
 		const state = this.getA2AState();
+		state.submittedTaskIds.add(task.id);
 		const run = async () => {
 			if (isTaskCanceled(task)) {
+				state.submittedTaskIds.delete(task.id);
 				return;
 			}
 			await this.runtime.session.agent.waitForIdle();
 			if (isTaskCanceled(task)) {
+				state.submittedTaskIds.delete(task.id);
 				return;
 			}
+			state.submittedTaskIds.delete(task.id);
 			state.activeTaskId = task.id;
 			task.status = {
 				state: "working",
@@ -411,6 +429,22 @@ function extractNewAssistantText(before: AgentRuntimeSnapshot, after: AgentRunti
 		}
 	}
 	return messages.length > 0 ? messages.join("\n\n") : "(No assistant reply was recorded.)";
+}
+
+function omitA2ATaskHistory(task: A2ATask, method: string): A2ATask {
+	if (!task.history || task.history.length === 0) {
+		return task;
+	}
+	console.error(`[a2a] omitted task history from ${method} response task=${task.id} history=${task.history.length}`);
+	const { history: _history, ...rest } = task;
+	return {
+		...rest,
+		metadata: {
+			...(typeof rest.metadata === "object" && rest.metadata !== null ? rest.metadata : {}),
+			historyOmitted: true,
+			historyLength: task.history.length,
+		},
+	};
 }
 
 function settleOrTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {

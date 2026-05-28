@@ -91,10 +91,13 @@ queued until the session becomes idle.
 
 By default, `a2a_send_message` is asynchronous and returns quickly with a
 submitted or working task. This avoids peer-to-peer deadlocks when multiple
-agents message each other at once. With `blocking: true`, the tool waits for the
-receiving runtime to finish the turn, up to `timeoutMs` (default 300000). If the
-timeout expires, the tool returns the current task state and the caller should
-use `a2a_get_task`.
+agents message each other at once. With `blocking: true`, the tool waits only
+when the receiving runtime can start this specific task immediately. If the
+task is queued behind another prompt or A2A task, the call still returns
+immediately with `submitted`; the caller should observe it with `a2a_get_task`
+or a monitor. If an immediate task runs longer than `timeoutMs` (default
+300000), the tool returns the current task state and the caller should continue
+polling with `a2a_get_task`.
 
 Use `a2a_get_task` with `{ agent, taskId }` to fetch status and artifacts. The
 task is owned by the receiving runtime, not by the sender. A task id should be

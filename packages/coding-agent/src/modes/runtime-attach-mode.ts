@@ -13,9 +13,11 @@ import {
 import chalk from "chalk";
 import { APP_NAME, APP_TITLE, VERSION } from "../config.ts";
 import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../core/agent-runtime-snapshot.ts";
+import type { ToolDefinition } from "../core/extensions/types.ts";
 import { FooterDataProvider } from "../core/footer-data-provider.ts";
 import { createIpcRuntimeClient, type IpcRuntimeClient } from "../core/ipc-runtime-client.ts";
 import { KeybindingsManager } from "../core/keybindings.ts";
+import { createLocalA2AToolDefinitions } from "../core/local-a2a.ts";
 import {
 	listRuntimeRegistryEntries,
 	type RuntimeRegistryEntry,
@@ -163,6 +165,7 @@ class RuntimeAttachView {
 	private statusKind: string | undefined;
 	private toolOutputExpanded = false;
 	private hideThinkingBlock = false;
+	private readonly localToolDefinitions = new Map<string, ToolDefinition>();
 	private unsubscribeStore?: () => void;
 	private finish?: () => void;
 
@@ -179,9 +182,13 @@ class RuntimeAttachView {
 		setKeybindings(this.keybindings);
 		this.footerDataProvider = new FooterDataProvider(client.store.snapshot.agent.cwd);
 		this.footer = new RuntimeFooterComponent(client.store.snapshot, this.footerDataProvider);
+		for (const definition of createLocalA2AToolDefinitions({ agentDir: options.agentDir, teamSpecs: [] })) {
+			this.localToolDefinitions.set(definition.name, definition);
+		}
 		this.transcript = new RuntimeTranscriptView({
 			tui,
 			cwd: client.store.snapshot.agent.cwd,
+			getToolDefinition: (toolName) => this.localToolDefinitions.get(toolName),
 			onPopulateHistory: (text) => this.editor.addToHistory(text),
 		});
 		this.editor = new CustomEditor(tui, getEditorTheme(), this.keybindings, { paddingX: 1 });

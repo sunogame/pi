@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { getAgentDir } from "../config.ts";
+import type { Theme } from "../modes/interactive/theme/theme.ts";
 import {
 	formatRelativeCardPath,
 	loadTeamAgentCards,
@@ -106,7 +108,12 @@ const sendMessageSchema = Type.Object({
 	}),
 	contextId: Type.Optional(Type.String({ description: "Optional A2A contextId for continuing related work." })),
 	taskId: Type.Optional(Type.String({ description: "Optional A2A taskId when adding input to an existing task." })),
-	blocking: Type.Optional(Type.Boolean({ description: "Wait until the peer finishes this turn. Defaults to false." })),
+	blocking: Type.Optional(
+		Type.Boolean({
+			description:
+				"Wait only if the peer can start this task immediately. Queued tasks still return immediately. Defaults to false.",
+		}),
+	),
 	timeoutMs: Type.Optional(
 		Type.Number({ description: "Maximum time to wait when blocking is true. Defaults to 300000." }),
 	),
@@ -120,6 +127,80 @@ const cancelTaskSchema = Type.Object({
 	agent: Type.String({ description: "Peer agent name that owns the task." }),
 	taskId: Type.String({ description: "A2A task id to cancel." }),
 });
+
+function formatA2ASendCall(args: Partial<Static<typeof sendMessageSchema>> | undefined, theme: Theme): string {
+	const target = args?.to ? theme.fg("accent", args.to) : theme.fg("toolOutput", "...");
+	const text = compactPreview(args?.text ?? "", 72);
+	const mode = args?.blocking ? theme.fg("muted", " blocking") : "";
+	return `${theme.fg("toolTitle", theme.bold("a2a_send_message"))} ${target}${mode}${text ? theme.fg("toolOutput", ` · ${text}`) : ""}`;
+}
+
+function formatA2AGetTaskCall(args: Partial<Static<typeof getTaskSchema>> | undefined, theme: Theme): string {
+	const agent = args?.agent ? theme.fg("accent", args.agent) : theme.fg("toolOutput", "...");
+	const taskId = args?.taskId ? shortId(args.taskId) : "...";
+	return `${theme.fg("toolTitle", theme.bold("a2a_get_task"))} ${agent}/${theme.fg("muted", taskId)}`;
+}
+
+function formatA2ACancelTaskCall(args: Partial<Static<typeof cancelTaskSchema>> | undefined, theme: Theme): string {
+	const agent = args?.agent ? theme.fg("accent", args.agent) : theme.fg("toolOutput", "...");
+	const taskId = args?.taskId ? shortId(args.taskId) : "...";
+	return `${theme.fg("toolTitle", theme.bold("a2a_cancel_task"))} ${agent}/${theme.fg("muted", taskId)}`;
+}
+
+function formatA2ATaskResult(task: A2ATask | undefined, theme: Theme): string {
+	if (!task) {
+		return theme.fg("toolOutput", "No task returned");
+	}
+	const owner = typeof task.metadata?.owner === "string" ? task.metadata.owner : "peer";
+	const state = task.status.state;
+	const stateText =
+		state === "completed"
+			? theme.fg("success", state)
+			: state === "failed" || state === "canceled" || state === "rejected"
+				? theme.fg("error", state)
+				: state === "working"
+					? theme.fg("accent", state)
+					: theme.fg("warning", state);
+	const lines = [
+		`${theme.fg("toolTitle", theme.bold("A2A task"))} ${stateText} · ${theme.fg("accent", owner)}/${theme.fg("muted", shortId(task.id))}`,
+	];
+	const messageText = taskMessageText(task.status.message);
+	if (messageText) {
+		lines.push(theme.fg("toolOutput", `  ${compactPreview(messageText, 160)}`));
+	}
+	if (task.artifacts && task.artifacts.length > 0) {
+		lines.push(theme.fg("muted", `  artifacts ${task.artifacts.length}`));
+	}
+	return lines.join("\n");
+}
+
+function taskMessageText(message: A2AMessage | undefined): string {
+	if (!message) {
+		return "";
+	}
+	return message.parts
+		.map((part) => (part.kind === "text" ? part.text : ""))
+		.filter(Boolean)
+		.join("\n\n");
+}
+
+function compactPreview(text: string, maxLength: number): string {
+	const compact = text.replace(/\s+/g, " ").trim();
+	if (compact.length <= maxLength) {
+		return compact;
+	}
+	return `${compact.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function shortId(id: string): string {
+	return id.length > 8 ? id.slice(0, 8) : id;
+}
+
+function textComponent(text: string, context: { lastComponent?: unknown }): Text {
+	const component = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+	component.setText(text);
+	return component;
+}
 
 export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): ToolDefinition[] {
 	const agentDir = options.agentDir ?? getAgentDir();
@@ -146,6 +227,7 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 			promptGuidelines: [
 				"Use a2a_send_message only when a peer Agent Card indicates it is a better fit for a focused question or task.",
 				"Peer agents are opaque and do not share your private memory; include the necessary context in the message.",
+				"blocking=true is only an immediate-start optimization; queued tasks return without waiting to avoid deadlocks.",
 				"If a2a_send_message returns a non-terminal Task, use a2a_get_task with the peer name and task id to check progress.",
 			],
 			parameters: sendMessageSchema,
@@ -170,7 +252,13 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 					},
 					metadata: options.selfName ? { from: options.selfName } : undefined,
 				});
-				return textResult(JSON.stringify(task, null, 2), { task });
+				return textResult(formatA2ATaskForModel(task), { task });
+			},
+			renderCall(args, theme, context) {
+				return textComponent(formatA2ASendCall(args, theme), context);
+			},
+			renderResult(result, _options, theme, context) {
+				return textComponent(formatA2ATaskResult(result.details?.task, theme), context);
 			},
 		}),
 		defineTool({
@@ -185,7 +273,13 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 					id: params.taskId,
 					historyLength: params.historyLength,
 				});
-				return textResult(JSON.stringify(task, null, 2), { task });
+				return textResult(formatA2ATaskForModel(task), { task });
+			},
+			renderCall(args, theme, context) {
+				return textComponent(formatA2AGetTaskCall(args, theme), context);
+			},
+			renderResult(result, _options, theme, context) {
+				return textComponent(formatA2ATaskResult(result.details?.task, theme), context);
 			},
 		}),
 		defineTool({
@@ -200,7 +294,13 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 				params: Static<typeof cancelTaskSchema>,
 			): Promise<AgentToolResult<{ task: A2ATask }>> {
 				const task = await cancelA2ATask(agentDir, params.agent, { id: params.taskId });
-				return textResult(JSON.stringify(task, null, 2), { task });
+				return textResult(formatA2ATaskForModel(task), { task });
+			},
+			renderCall(args, theme, context) {
+				return textComponent(formatA2ACancelTaskCall(args, theme), context);
+			},
+			renderResult(result, _options, theme, context) {
+				return textComponent(formatA2ATaskResult(result.details?.task, theme), context);
 			},
 		}),
 	];
@@ -261,6 +361,49 @@ function toPublicCard(card: PiA2AAgentCard): Record<string, unknown> {
 		cardPath: formatRelativeCardPath(card),
 		live: listRuntimeRegistryEntries(getAgentDir()).some((entry) => entry.agentId === card.name),
 	};
+}
+
+function formatA2ATaskForModel(task: A2ATask): string {
+	return JSON.stringify(a2aTaskModelView(task), null, 2);
+}
+
+function a2aTaskModelView(task: A2ATask): Record<string, unknown> {
+	const metadata = typeof task.metadata === "object" && task.metadata !== null ? task.metadata : {};
+	const view: Record<string, unknown> = {
+		kind: task.kind,
+		id: task.id,
+		contextId: task.contextId,
+		state: task.status.state,
+		timestamp: task.status.timestamp,
+		owner: metadata.owner,
+		from: metadata.from,
+		blocking: metadata.blocking,
+	};
+	if (metadata.historyOmitted) {
+		view.historyOmitted = true;
+		view.historyLength = metadata.historyLength;
+	}
+	const statusText = taskMessageText(task.status.message);
+	if (statusText) {
+		view.message = compactPreview(statusText, 500);
+	}
+	if (task.history) {
+		view.history = task.history.map((message) => ({
+			role: message.role,
+			text: compactPreview(taskMessageText(message), 500),
+			taskId: message.taskId,
+			contextId: message.contextId,
+		}));
+	}
+	if (task.artifacts && task.artifacts.length > 0) {
+		view.artifacts = task.artifacts.map((artifact) => ({
+			artifactId: artifact.artifactId,
+			name: artifact.name,
+			description: artifact.description,
+			parts: artifact.parts,
+		}));
+	}
+	return view;
 }
 
 function textResult<T>(text: string, details: T): AgentToolResult<T> {
