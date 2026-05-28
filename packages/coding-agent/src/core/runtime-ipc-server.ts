@@ -463,6 +463,11 @@ function formatInboundA2AMessage(message: A2AMessage, from: string | undefined):
 	if (message.taskId) {
 		parts.push(`<task-id>${xmlEscape(message.taskId)}</task-id>`);
 	}
+	parts.push(
+		"<instruction>",
+		"Answer this A2A message directly in the current assistant response. Do not call a2a_send_message back to acknowledge or reply.",
+		"</instruction>",
+	);
 	parts.push("<text>", xmlEscape(messageText(message)), "</text>", "</a2a-message>");
 	return parts.join("\n");
 }

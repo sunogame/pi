@@ -195,6 +195,12 @@ describe("RuntimeIpcServer", () => {
 			}),
 			{ triggerTurn: true },
 		);
+		expect(runtime.sendCustomMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				content: expect.stringContaining("Do not call a2a_send_message back"),
+			}),
+			{ triggerTurn: true },
+		);
 		expect(task.status.state).toBe("completed");
 		expect(runtime.emitA2ATaskChanged.mock.calls.map(([event]) => event.state)).toEqual([
 			"submitted",

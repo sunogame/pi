@@ -226,6 +226,7 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 			promptSnippet: "a2a_send_message: send a message to a peer agent; returns an A2A Task.",
 			promptGuidelines: [
 				"Use a2a_send_message only when a peer Agent Card indicates it is a better fit for a focused question or task.",
+				"Do not use a2a_send_message to acknowledge or reply to an incoming <a2a-message>; answer directly in the current turn instead.",
 				"Include the necessary context in the message.",
 				"When a2a_send_message returns a non-terminal Task, pi automatically starts an A2A task watcher and will notify you when the task reaches a terminal state. Do not start a shell monitor for A2A tasks.",
 				"blocking=true is only an immediate-start optimization; queued tasks return without waiting to avoid deadlocks.",
