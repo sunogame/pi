@@ -148,7 +148,7 @@ describe("RuntimeIpcServer", () => {
 	it("serves local A2A message/send and tasks/get", async () => {
 		const { clientTransport, serverTransport } = createTransportPair();
 		const runtime = createFakeRuntime(snapshot(1, "idle"));
-		runtime.prompt.mockImplementation(async () => {
+		runtime.sendCustomMessage.mockImplementation(async () => {
 			runtime.currentSnapshot = snapshot(2, "idle", {
 				entries: [
 					{
@@ -177,6 +177,14 @@ describe("RuntimeIpcServer", () => {
 			configuration: { blocking: true },
 		});
 
+		expect(runtime.sendCustomMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customType: "a2a-message",
+				content: expect.stringContaining("<a2a-message>"),
+				display: true,
+			}),
+			{ triggerTurn: true },
+		);
 		expect(task.status.state).toBe("completed");
 		expect(task.artifacts?.[0]?.parts[0]).toEqual({ kind: "text", text: "backend answer" });
 		expect(task.history).toBeUndefined();
@@ -199,7 +207,7 @@ describe("RuntimeIpcServer", () => {
 		const { clientTransport, serverTransport } = createTransportPair();
 		const runtime = createFakeRuntime(snapshot(1, "idle"));
 		let releasePrompt: (() => void) | undefined;
-		runtime.prompt.mockImplementation(
+		runtime.sendCustomMessage.mockImplementation(
 			() =>
 				new Promise<void>((resolve) => {
 					releasePrompt = resolve;
@@ -228,7 +236,7 @@ describe("RuntimeIpcServer", () => {
 		});
 
 		await tick();
-		expect(runtime.prompt).toHaveBeenCalledTimes(1);
+		expect(runtime.sendCustomMessage).toHaveBeenCalledTimes(1);
 		await expect(client.a2aGetTask({ id: first.id })).resolves.toMatchObject({ status: { state: "working" } });
 		await expect(client.a2aGetTask({ id: second.id })).resolves.toMatchObject({ status: { state: "submitted" } });
 
@@ -245,7 +253,7 @@ describe("RuntimeIpcServer", () => {
 		const { clientTransport, serverTransport } = createTransportPair();
 		const runtime = createFakeRuntime(snapshot(1, "idle"));
 		let releasePrompt: (() => void) | undefined;
-		runtime.prompt.mockImplementation(
+		runtime.sendCustomMessage.mockImplementation(
 			() =>
 				new Promise<void>((resolve) => {
 					releasePrompt = resolve;
@@ -277,7 +285,7 @@ describe("RuntimeIpcServer", () => {
 		});
 
 		expect(second.status.state).toBe("submitted");
-		expect(runtime.prompt).toHaveBeenCalledTimes(1);
+		expect(runtime.sendCustomMessage).toHaveBeenCalledTimes(1);
 
 		releasePrompt?.();
 		await tick();
@@ -310,6 +318,7 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 	host: AgentSessionRuntime;
 	attachRuntime: ReturnType<typeof vi.fn>;
 	prompt: ReturnType<typeof vi.fn>;
+	sendCustomMessage: ReturnType<typeof vi.fn>;
 	executeExtensionCommand: ReturnType<typeof vi.fn>;
 	newSession: ReturnType<typeof vi.fn>;
 	compact: ReturnType<typeof vi.fn>;
@@ -333,6 +342,7 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 			};
 		}),
 		prompt: vi.fn(async () => {}),
+		sendCustomMessage: vi.fn(async () => {}),
 		abort: vi.fn(async () => {}),
 		executeExtensionCommand: vi.fn(async () => true),
 		newSession: vi.fn(async () => ({ cancelled: false })),
@@ -347,6 +357,7 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 			newSession: fake.newSession,
 			session: {
 				prompt: fake.prompt,
+				sendCustomMessage: fake.sendCustomMessage,
 				abort: fake.abort,
 				compact: fake.compact,
 				stopMonitor: fake.stopMonitor,
@@ -356,6 +367,7 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 		} as unknown as AgentSessionRuntime,
 		attachRuntime: fake.attachRuntime,
 		prompt: fake.prompt,
+		sendCustomMessage: fake.sendCustomMessage,
 		abort: fake.abort,
 		executeExtensionCommand: fake.executeExtensionCommand,
 		newSession: fake.newSession,

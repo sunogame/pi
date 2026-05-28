@@ -31,6 +31,7 @@ import { KeybindingsManager } from "./core/keybindings.ts";
 import { createLocalA2AToolDefinitions } from "./core/local-a2a.ts";
 import type { ModelRegistry } from "./core/model-registry.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
+import type { RuntimeNotification } from "./core/monitor-manager.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
 import {
@@ -564,12 +565,14 @@ export async function main(args: string[], options?: MainOptions) {
 	const teamPrompt = teamConfig
 		? formatTeamAgentCardsForPrompt(loadTeamAgentCards(teamConfig.runtimes, cwd), teamMemberName)
 		: undefined;
+	const a2aNotificationBridge: { enqueue?: (notification: RuntimeNotification) => void } = {};
 	const localA2ATools = teamConfig
 		? createLocalA2AToolDefinitions({
 				agentDir,
 				selfName: teamMemberName,
 				teamSpecs: teamConfig.runtimes,
 				configBaseCwd: cwd,
+				onRuntimeNotification: (notification) => a2aNotificationBridge.enqueue?.(notification),
 			})
 		: [];
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
@@ -661,6 +664,7 @@ export async function main(args: string[], options?: MainOptions) {
 		if (created.session.model && cliThinkingOverride) {
 			created.session.setThinkingLevel(created.session.thinkingLevel);
 		}
+		a2aNotificationBridge.enqueue = (notification) => created.session.enqueueRuntimeNotification(notification);
 
 		return {
 			...created,

@@ -60,7 +60,11 @@ and appends a concise discovery section to the system prompt:
 Peer agents are available through local A2A-style tools.
 Use Agent Cards to choose the right peer agent for a question or task.
 Peer agents are opaque: they do not share your private memory, filesystem, or tools. Include necessary context in your message.
-Use a2a_send_message to contact a peer. It returns an A2A Task; use a2a_get_task with the peer name and task id to check status and results. Leave blocking unset for normal peer messages, especially broadcasts. Set blocking=true only when you need to wait for one specific peer before continuing. Use a2a_cancel_task only when the remote task is no longer needed or should stop.
+Use a2a_send_message to contact a peer. It returns an A2A Task owned by the peer. Leave blocking unset for normal peer messages, especially broadcasts. Set blocking=true only when you need to wait for one specific peer before continuing.
+If a2a_send_message returns a non-terminal Task, pi automatically starts an A2A task watcher and notifies the sender with an <a2a-task-notification> when the task reaches a terminal state. Do not start a shell monitor for A2A tasks.
+Use a2a_get_task only when you need an immediate status refresh before the automatic notification arrives, or when recovering a task by id.
+Use a2a_cancel_task only when the remote task is no longer needed or should stop.
+When you receive an <a2a-message>, answer it directly in the current turn. That assistant response completes the peer-owned Task and is returned to the sender.
 
 <available_peer_agents>
   <agent_card name="backend">
@@ -94,21 +98,35 @@ submitted or working task. This avoids peer-to-peer deadlocks when multiple
 agents message each other at once. With `blocking: true`, the tool waits only
 when the receiving runtime can start this specific task immediately. If the
 task is queued behind another prompt or A2A task, the call still returns
-immediately with `submitted`; the caller should observe it with `a2a_get_task`
-or a monitor. If an immediate task runs longer than `timeoutMs` (default
+immediately with `submitted`; the caller should wait for the automatic
+`a2a-task-notification` or use `a2a_get_task` for an immediate status refresh.
+Do not start a shell `monitor` for A2A tasks. If an immediate task runs longer than `timeoutMs` (default
 300000), the tool returns the current task state and the caller should continue
-polling with `a2a_get_task`.
+waiting for the automatic notification or fetch status with `a2a_get_task`.
 
-Use `a2a_get_task` with `{ agent, taskId }` to fetch status and artifacts. The
-task is owned by the receiving runtime, not by the sender. A task id should be
-displayed or remembered together with its owner, for example `qa/<taskId>`.
+When `a2a_send_message` returns a non-terminal task, pi automatically starts a
+local A2A task watcher in the sender runtime. The tool result includes
+`autoWatcher.status: "started"`, and the sender later receives an
+`a2a-task-notification` custom message when the peer task reaches a terminal
+state or the watcher times out. This notification triggers a normal follow-up
+turn, so the sender model can react without remembering to poll manually.
+
+Use `a2a_get_task` with `{ agent, taskId }` only for immediate status refreshes
+or recovery by id. The task is owned by the receiving runtime, not by the
+sender. A task id should be displayed or remembered together with its owner,
+for example `qa/<taskId>`.
 
 Use `a2a_cancel_task` only when work should stop. Completion is controlled by
 the receiving runtime; callers do not mark peer tasks as done.
 
-Incoming A2A messages are wrapped before they are shown to the receiving model,
-for example `[A2A message from peer agent "backend"]`, so the receiving
-transcript can distinguish peer traffic from direct human input.
+Incoming A2A messages are persisted as `custom_message` entries with
+`customType: "a2a-message"` and are shown to the receiving model as structured
+`<a2a-message>` content. The TUI renders them as peer messages instead of raw
+XML, so the receiving transcript can distinguish peer traffic from direct human
+input. The receiver should answer directly in the current turn; that assistant
+response completes the peer-owned Task and is returned to the sender. The
+receiver should not call `a2a_send_message` back to the sender unless it is
+starting a separate new task.
 
 ## Current Limits
 

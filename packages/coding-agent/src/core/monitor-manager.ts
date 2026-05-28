@@ -34,12 +34,11 @@ export interface MonitorTaskSnapshot {
 
 export interface RuntimeNotification {
 	id: string;
-	kind: "monitor";
+	kind: "monitor" | "a2a";
+	customType?: string;
 	createdAt: number;
 	text: string;
-	source: {
-		monitorId: string;
-	};
+	source: Record<string, string>;
 }
 
 export interface MonitorManagerOptions {

@@ -79,6 +79,22 @@ export class CustomMessageComponent extends Container {
 				return;
 			}
 		}
+		if (this.message.customType === "a2a-message") {
+			const component = renderA2AMessage(text);
+			if (component) {
+				this.customComponent = component;
+				this.addChild(component);
+				return;
+			}
+		}
+		if (this.message.customType === "a2a-task-notification") {
+			const component = renderA2ATaskNotification(text);
+			if (component) {
+				this.customComponent = component;
+				this.addChild(component);
+				return;
+			}
+		}
 
 		// Default rendering uses our box
 		this.addChild(this.box);
@@ -115,6 +131,129 @@ interface MonitorNotificationView {
 	exitCode?: string;
 	error?: string;
 	event?: string;
+}
+
+interface A2AMessageView {
+	from?: string;
+	messageId?: string;
+	contextId?: string;
+	taskId?: string;
+	text?: string;
+}
+
+interface A2ATaskNotificationView {
+	agent?: string;
+	taskId?: string;
+	contextId?: string;
+	notificationStatus?: string;
+	state?: string;
+	message?: string;
+	artifact?: string;
+	error?: string;
+}
+
+function renderA2AMessage(raw: string): Component | undefined {
+	const message = parseA2AMessage(raw);
+	if (!message) {
+		return undefined;
+	}
+
+	const container = new Container();
+	const from = message.from ? ` from ${theme.fg("accent", message.from)}` : "";
+	const header = `${theme.fg("accent", "●")} ${theme.fg("toolTitle", theme.bold("A2A message"))}${from}`;
+	container.addChild(new Text(header, 0, 0));
+
+	if (message.text) {
+		const body = message.text
+			.trimEnd()
+			.split("\n")
+			.map((line) => `  ${theme.fg("customMessageText", line)}`)
+			.join("\n");
+		container.addChild(new Text(body, 0, 0));
+	}
+
+	const meta: string[] = [];
+	if (message.taskId) meta.push(`task ${shortId(message.taskId)}`);
+	if (message.contextId) meta.push(`context ${shortId(message.contextId)}`);
+	if (message.messageId) meta.push(`message ${shortId(message.messageId)}`);
+	if (meta.length > 0) {
+		container.addChild(new Text(theme.fg("muted", `  ${meta.join(" · ")}`), 0, 0));
+	}
+
+	return container;
+}
+
+function renderA2ATaskNotification(raw: string): Component | undefined {
+	const notification = parseA2ATaskNotification(raw);
+	if (!notification) {
+		return undefined;
+	}
+
+	const container = new Container();
+	const state = notification.state ?? notification.notificationStatus ?? "updated";
+	const stateLabel =
+		state === "completed"
+			? theme.fg("success", state)
+			: state === "failed" || state === "canceled" || state === "rejected"
+				? theme.fg("error", state)
+				: theme.fg("warning", state);
+	const agent = notification.agent ? ` · ${theme.fg("accent", notification.agent)}` : "";
+	const header = `${theme.fg("accent", "●")} ${theme.fg("toolTitle", theme.bold("A2A task"))} · ${stateLabel}${agent}`;
+	container.addChild(new Text(header, 0, 0));
+
+	const body = notification.artifact || notification.message;
+	if (body) {
+		container.addChild(
+			new Text(
+				body
+					.trimEnd()
+					.split("\n")
+					.map((line) => `  ${theme.fg("customMessageText", line)}`)
+					.join("\n"),
+				0,
+				0,
+			),
+		);
+	}
+
+	const meta: string[] = [];
+	if (notification.taskId) meta.push(`task ${shortId(notification.taskId)}`);
+	if (notification.contextId) meta.push(`context ${shortId(notification.contextId)}`);
+	if (notification.error) meta.push(notification.error);
+	if (meta.length > 0) {
+		container.addChild(new Text(theme.fg(notification.error ? "error" : "muted", `  ${meta.join(" · ")}`), 0, 0));
+	}
+
+	return container;
+}
+
+function parseA2AMessage(raw: string): A2AMessageView | undefined {
+	if (!raw.includes("<a2a-message>")) {
+		return undefined;
+	}
+	return {
+		from: readXmlTag(raw, "from"),
+		messageId: readXmlTag(raw, "message-id"),
+		contextId: readXmlTag(raw, "context-id"),
+		taskId: readXmlTag(raw, "task-id"),
+		text: readXmlTag(raw, "text"),
+	};
+}
+
+function parseA2ATaskNotification(raw: string): A2ATaskNotificationView | undefined {
+	if (!raw.includes("<a2a-task-notification>")) {
+		return undefined;
+	}
+	return {
+		agent: readXmlTag(raw, "agent"),
+		taskId: readXmlTag(raw, "task-id"),
+		contextId: readXmlTag(raw, "context-id"),
+		notificationStatus: readXmlTag(raw, "notification-status"),
+		state: readXmlTag(raw, "state"),
+		message: readXmlTag(raw, "message"),
+		artifact: readXmlTag(raw, "artifact"),
+		error: readXmlTag(raw, "error"),
+	};
 }
 
 function renderMonitorNotification(raw: string): Component | undefined {
@@ -158,6 +297,10 @@ function renderMonitorNotification(raw: string): Component | undefined {
 	}
 
 	return container;
+}
+
+function shortId(id: string): string {
+	return id.length > 8 ? id.slice(0, 8) : id;
 }
 
 function parseMonitorNotification(raw: string): MonitorNotificationView | undefined {

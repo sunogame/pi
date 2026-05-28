@@ -13,6 +13,7 @@ import type { AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
 import type { AgentToolResult } from "./extensions/index.ts";
 import { defineTool, type ToolDefinition } from "./extensions/types.ts";
 import { createIpcRuntimeClient } from "./ipc-runtime-client.ts";
+import type { RuntimeNotification } from "./monitor-manager.ts";
 import { listRuntimeRegistryEntries, type RuntimeRegistryEntry, readRuntimeRegistryEntry } from "./runtime-registry.ts";
 import { connectRuntimeSocket } from "./runtime-socket-transport.ts";
 
@@ -96,6 +97,8 @@ export interface LocalA2AToolsOptions {
 	selfName?: string;
 	teamSpecs: TeamRuntimeCardSpec[];
 	configBaseCwd?: string;
+	onRuntimeNotification?: (notification: RuntimeNotification) => void;
+	taskPollIntervalMs?: number;
 }
 
 const listAgentCardsSchema = Type.Object({});
@@ -227,8 +230,10 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 			promptGuidelines: [
 				"Use a2a_send_message only when a peer Agent Card indicates it is a better fit for a focused question or task.",
 				"Peer agents are opaque and do not share your private memory; include the necessary context in the message.",
+				"When you receive an <a2a-message>, answer it directly in the current turn. Your assistant response completes the sender's Task; do not call a2a_send_message back unless you need to start a separate new task.",
 				"blocking=true is only an immediate-start optimization; queued tasks return without waiting to avoid deadlocks.",
-				"If a2a_send_message returns a non-terminal Task, use a2a_get_task with the peer name and task id to check progress.",
+				"When a2a_send_message returns a non-terminal Task, pi automatically starts an A2A task watcher and will notify you when the task reaches a terminal state. Do not start a shell monitor for A2A tasks.",
+				"Use a2a_get_task only when you need an immediate status refresh before the automatic notification arrives, or when recovering a task by id.",
 			],
 			parameters: sendMessageSchema,
 			executionMode: "sequential",
@@ -252,7 +257,8 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 					},
 					metadata: options.selfName ? { from: options.selfName } : undefined,
 				});
-				return textResult(formatA2ATaskForModel(task), { task });
+				const autoMonitor = maybeStartA2ATaskWatcher(agentDir, params.to, task, options);
+				return textResult(formatA2ATaskForModel(task, autoMonitor), { task });
 			},
 			renderCall(args, theme, context) {
 				return textComponent(formatA2ASendCall(args, theme), context);
@@ -363,11 +369,14 @@ function toPublicCard(card: PiA2AAgentCard): Record<string, unknown> {
 	};
 }
 
-function formatA2ATaskForModel(task: A2ATask): string {
-	return JSON.stringify(a2aTaskModelView(task), null, 2);
+const TERMINAL_A2A_STATES = new Set<A2ATaskState>(["completed", "canceled", "failed", "rejected"]);
+const activeA2ATaskWatchers = new Set<string>();
+
+function formatA2ATaskForModel(task: A2ATask, autoMonitor = false): string {
+	return JSON.stringify(a2aTaskModelView(task, autoMonitor), null, 2);
 }
 
-function a2aTaskModelView(task: A2ATask): Record<string, unknown> {
+function a2aTaskModelView(task: A2ATask, autoMonitor = false): Record<string, unknown> {
 	const metadata = typeof task.metadata === "object" && task.metadata !== null ? task.metadata : {};
 	const view: Record<string, unknown> = {
 		kind: task.kind,
@@ -379,6 +388,12 @@ function a2aTaskModelView(task: A2ATask): Record<string, unknown> {
 		from: metadata.from,
 		blocking: metadata.blocking,
 	};
+	if (autoMonitor) {
+		view.autoWatcher = {
+			status: "started",
+			note: "You will receive an a2a-task-notification when this task reaches a terminal state.",
+		};
+	}
 	if (metadata.historyOmitted) {
 		view.historyOmitted = true;
 		view.historyLength = metadata.historyLength;
@@ -404,6 +419,113 @@ function a2aTaskModelView(task: A2ATask): Record<string, unknown> {
 		}));
 	}
 	return view;
+}
+
+function maybeStartA2ATaskWatcher(
+	agentDir: string,
+	agent: string,
+	task: A2ATask,
+	options: LocalA2AToolsOptions,
+): boolean {
+	if (!options.onRuntimeNotification || isTerminalA2ATask(task)) {
+		return false;
+	}
+	const key = `${agentDir}\0${agent}\0${task.id}`;
+	if (activeA2ATaskWatchers.has(key)) {
+		return true;
+	}
+	activeA2ATaskWatchers.add(key);
+	const pollIntervalMs = Math.max(500, options.taskPollIntervalMs ?? 2000);
+	const deadline = Date.now() + 10 * 60 * 1000;
+
+	const poll = async () => {
+		try {
+			const next = await getA2ATask(agentDir, agent, { id: task.id, historyLength: 0 });
+			if (isTerminalA2ATask(next)) {
+				activeA2ATaskWatchers.delete(key);
+				options.onRuntimeNotification?.(createA2ATaskNotification(agent, next));
+				return;
+			}
+			if (Date.now() >= deadline) {
+				activeA2ATaskWatchers.delete(key);
+				options.onRuntimeNotification?.(
+					createA2ATaskNotification(agent, next, "watcher-timeout", "A2A task monitor timed out."),
+				);
+				return;
+			}
+		} catch (error) {
+			activeA2ATaskWatchers.delete(key);
+			options.onRuntimeNotification?.(
+				createA2ATaskNotification(
+					agent,
+					task,
+					"watcher-error",
+					error instanceof Error ? error.message : String(error),
+				),
+			);
+			return;
+		}
+		setTimeout(() => {
+			void poll();
+		}, pollIntervalMs).unref?.();
+	};
+
+	setTimeout(() => {
+		void poll();
+	}, pollIntervalMs).unref?.();
+	return true;
+}
+
+function isTerminalA2ATask(task: A2ATask): boolean {
+	return TERMINAL_A2A_STATES.has(task.status.state);
+}
+
+function createA2ATaskNotification(
+	agent: string,
+	task: A2ATask,
+	notificationStatus = "terminal",
+	error?: string,
+): RuntimeNotification {
+	return {
+		id: `n_${randomUUID()}`,
+		kind: "a2a",
+		customType: "a2a-task-notification",
+		createdAt: Date.now(),
+		source: { agent, taskId: task.id },
+		text: formatA2ATaskNotification(agent, task, notificationStatus, error),
+	};
+}
+
+function formatA2ATaskNotification(agent: string, task: A2ATask, notificationStatus: string, error?: string): string {
+	const parts = [
+		"<a2a-task-notification>",
+		`<agent>${xmlEscape(agent)}</agent>`,
+		`<task-id>${xmlEscape(task.id)}</task-id>`,
+		`<context-id>${xmlEscape(task.contextId)}</context-id>`,
+		`<notification-status>${xmlEscape(notificationStatus)}</notification-status>`,
+		`<state>${xmlEscape(task.status.state)}</state>`,
+	];
+	const messageText = taskMessageText(task.status.message);
+	if (messageText) {
+		parts.push("<message>", xmlEscape(messageText), "</message>");
+	}
+	const artifactText = (task.artifacts ?? [])
+		.flatMap((artifact) => artifact.parts)
+		.map((part) => (part.kind === "text" ? part.text : ""))
+		.filter(Boolean)
+		.join("\n\n");
+	if (artifactText) {
+		parts.push("<artifact>", xmlEscape(artifactText), "</artifact>");
+	}
+	if (error) {
+		parts.push("<error>", xmlEscape(error), "</error>");
+	}
+	parts.push("</a2a-task-notification>");
+	return parts.join("\n");
+}
+
+function xmlEscape(text: string): string {
+	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function textResult<T>(text: string, details: T): AgentToolResult<T> {

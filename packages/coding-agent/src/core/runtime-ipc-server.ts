@@ -287,7 +287,20 @@ export class RuntimeIpcServer {
 			appendTaskHistory(task, task.status.message);
 			try {
 				const before = this.runtime.getSnapshot();
-				await this.runtime.session.prompt(formatInboundA2AMessage(message, from), { source: "extension" });
+				await this.runtime.session.sendCustomMessage(
+					{
+						customType: "a2a-message",
+						content: formatInboundA2AMessage(message, from),
+						display: true,
+						details: {
+							from,
+							messageId: message.messageId,
+							contextId: message.contextId,
+							taskId: message.taskId,
+						},
+					},
+					{ triggerTurn: true },
+				);
 				if (task.status.state === "canceled") {
 					return;
 				}
@@ -408,8 +421,19 @@ function messageText(message: A2AMessage): string {
 }
 
 function formatInboundA2AMessage(message: A2AMessage, from: string | undefined): string {
-	const source = from ? ` from peer agent "${from}"` : "";
-	return [`[A2A message${source}]`, messageText(message)].join("\n\n");
+	const parts = ["<a2a-message>"];
+	if (from) {
+		parts.push(`<from>${xmlEscape(from)}</from>`);
+	}
+	parts.push(`<message-id>${xmlEscape(message.messageId)}</message-id>`);
+	if (message.contextId) {
+		parts.push(`<context-id>${xmlEscape(message.contextId)}</context-id>`);
+	}
+	if (message.taskId) {
+		parts.push(`<task-id>${xmlEscape(message.taskId)}</task-id>`);
+	}
+	parts.push("<text>", xmlEscape(messageText(message)), "</text>", "</a2a-message>");
+	return parts.join("\n");
 }
 
 function extractNewAssistantText(before: AgentRuntimeSnapshot, after: AgentRuntimeSnapshot): string {
@@ -445,6 +469,10 @@ function omitA2ATaskHistory(task: A2ATask, method: string): A2ATask {
 			historyLength: task.history.length,
 		},
 	};
+}
+
+function xmlEscape(text: string): string {
+	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function settleOrTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {

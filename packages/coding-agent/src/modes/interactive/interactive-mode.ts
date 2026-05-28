@@ -3112,6 +3112,10 @@ export class InteractiveMode {
 		return textBlocks.map((c) => (c as { text: string }).text).join("");
 	}
 
+	private shouldAddUserMessageToInputHistory(text: string): boolean {
+		return !text.trimStart().startsWith("[A2A message");
+	}
+
 	/**
 	 * Show a status message in the chat.
 	 *
@@ -3204,7 +3208,7 @@ export class InteractiveMode {
 						const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings());
 						this.chatContainer.addChild(userComponent);
 					}
-					if (options?.populateHistory) {
+					if (options?.populateHistory && this.shouldAddUserMessageToInputHistory(textContent)) {
 						this.editor.addToHistory?.(textContent);
 					}
 				}

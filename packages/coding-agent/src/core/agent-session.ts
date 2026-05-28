@@ -788,6 +788,10 @@ export class AgentSession {
 		}));
 	}
 
+	enqueueRuntimeNotification(notification: RuntimeNotification): void {
+		this._enqueueRuntimeNotification(notification);
+	}
+
 	getActiveMonitors(): MonitorTaskSnapshot[] {
 		return this._monitorManager.getActive();
 	}
@@ -1007,7 +1011,7 @@ export class AgentSession {
 				try {
 					await this.sendCustomMessage(
 						{
-							customType: "monitor-notification",
+							customType: notification.customType ?? "monitor-notification",
 							content: notification.text,
 							display: true,
 							details: notification,
