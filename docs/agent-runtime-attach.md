@@ -3,6 +3,10 @@
 This document describes the target split between long-running agent runtimes
 and the TUI clients that attach to them.
 
+For user-facing commands and workflows, see
+[Runtime Attach Usage](./runtime-attach-usage.md) or
+[Runtime Attach 使用说明](./runtime-attach-usage-zh.md).
+
 ## Goal
 
 `pi` currently runs one `AgentSession` inside one interactive TUI process. That

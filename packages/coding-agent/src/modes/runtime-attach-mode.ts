@@ -18,6 +18,7 @@ import { createIpcRuntimeClient, type IpcRuntimeClient } from "../core/ipc-runti
 import { KeybindingsManager } from "../core/keybindings.ts";
 import {
 	listRuntimeRegistryEntries,
+	type RuntimeRegistryEntry,
 	readRuntimeRegistryEntry,
 	removeRuntimeRegistryEntry,
 } from "../core/runtime-registry.ts";
@@ -46,6 +47,11 @@ export interface RuntimeAttachModeOptions {
 	agentDir?: string;
 	attach?: string;
 	runtimeSocket?: string;
+}
+
+export interface RuntimeBroadcastResult {
+	delivered: string[];
+	failed: Array<{ agentId: string; error: string }>;
 }
 
 export async function runRuntimeAttachMode(
@@ -300,7 +306,38 @@ class RuntimeAttachView {
 			this.showRuntimeList();
 			return true;
 		}
+		if (command.name === "broadcast") {
+			await this.broadcast(command.args.trim());
+			return true;
+		}
 		return false;
+	}
+
+	private async broadcast(message: string): Promise<void> {
+		if (!message) {
+			this.showStatusMessage(theme.fg("warning", "Usage: /broadcast <message>"));
+			return;
+		}
+		if (!this.agentDir) {
+			this.showStatusMessage(theme.fg("warning", "Runtime registry is unavailable in this attach session."));
+			return;
+		}
+		const entries = listRuntimeRegistryEntries(this.agentDir);
+		if (entries.length === 0) {
+			this.showStatusMessage(theme.fg("muted", "No registered runtimes."));
+			return;
+		}
+		const result = await broadcastToRuntimeEntries(entries, message);
+		const parts = [`broadcast delivered ${result.delivered.length}/${entries.length}`];
+		if (result.delivered.length > 0) {
+			parts.push(`ok: ${result.delivered.join(",")}`);
+		}
+		if (result.failed.length > 0) {
+			parts.push(`failed: ${result.failed.map((failure) => failure.agentId).join(",")}`);
+		}
+		this.showStatusMessage(
+			result.failed.length > 0 ? theme.fg("warning", parts.join("  ")) : theme.fg("accent", parts.join("  ")),
+		);
 	}
 
 	private async switchRuntime(runtimeId: string): Promise<void> {
@@ -839,4 +876,33 @@ function createPlaceholderSnapshot(cwd: string): AgentRuntimeSnapshot {
 		},
 		commands: [],
 	};
+}
+
+export async function broadcastToRuntimeEntries(
+	entries: readonly RuntimeRegistryEntry[],
+	message: string,
+): Promise<RuntimeBroadcastResult> {
+	const delivered: string[] = [];
+	const failed: Array<{ agentId: string; error: string }> = [];
+	await Promise.all(
+		entries.map(async (entry) => {
+			let client: IpcRuntimeClient | undefined;
+			try {
+				const transport = await connectRuntimeSocket(entry.socketPath);
+				client = createIpcRuntimeClient(transport, createPlaceholderSnapshot(entry.cwd));
+				await client.prompt(message);
+				delivered.push(entry.agentId);
+			} catch (error) {
+				failed.push({
+					agentId: entry.agentId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			} finally {
+				client?.close();
+			}
+		}),
+	);
+	delivered.sort((a, b) => a.localeCompare(b));
+	failed.sort((a, b) => a.agentId.localeCompare(b.agentId));
+	return { delivered, failed };
 }
