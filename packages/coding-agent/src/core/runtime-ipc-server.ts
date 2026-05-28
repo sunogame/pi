@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { xmlEscape } from "../utils/xml.ts";
 import type { AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
 import type { PromptOptions } from "./agent-session.ts";
 import type { AgentSessionRuntime } from "./agent-session-runtime.ts";
@@ -13,6 +14,7 @@ import type {
 	RuntimeIpcResult,
 } from "./runtime-ipc.ts";
 import type { RuntimeTransport } from "./runtime-transport.ts";
+import type { SessionEntry } from "./session-manager.ts";
 
 interface A2ARuntimeState {
 	tasks: Map<string, A2ATask>;
@@ -155,8 +157,8 @@ export class RuntimeIpcServer {
 				if (text.trim().length === 0) {
 					throw invalidParams("message/send requires non-empty text");
 				}
-				if (params.message.taskId && this.getA2ATasks().has(params.message.taskId)) {
-					throw invalidParams(`Task already exists: ${params.message.taskId}`);
+				if (params.message.taskId) {
+					throw invalidParams("message/send taskId continuation is not supported yet");
 				}
 				const from = typeof params.metadata?.from === "string" ? params.metadata.from : undefined;
 				const task = createA2ATask(params.message, {
@@ -165,6 +167,7 @@ export class RuntimeIpcServer {
 					from,
 				});
 				this.getA2ATasks().set(task.id, task);
+				this.emitA2ATaskChanged(task);
 				const shouldBlock = params.configuration?.blocking !== false && this.canStartA2ATaskImmediately();
 				const runPromise = this.enqueueA2ATask(task, params.message, from);
 				if (!shouldBlock) {
@@ -172,7 +175,7 @@ export class RuntimeIpcServer {
 				} else {
 					await settleOrTimeout(runPromise, params.configuration?.timeoutMs ?? DEFAULT_A2A_SEND_TIMEOUT_MS);
 				}
-				return { task: omitA2ATaskHistory(task, "a2a/message/send") };
+				return { task: omitA2ATaskHistory(task) };
 			}
 			case "a2a/tasks/get": {
 				const params = readObjectParams(request.params) as unknown as A2ATaskQueryParams;
@@ -187,25 +190,19 @@ export class RuntimeIpcServer {
 					throw invalidParams("tasks/cancel requires params.id");
 				}
 				const task = this.getExistingA2ATask(params.id);
-				if (task.status.state === "working" && this.getA2AState().activeTaskId === task.id) {
-					await this.runtime.session.abort();
-				}
 				if (
 					task.status.state === "submitted" ||
 					task.status.state === "working" ||
 					task.status.state === "input-required"
 				) {
-					task.status = {
-						state: "canceled",
-						message: createA2AAgentMessage(task, "Task canceled."),
-						timestamp: new Date().toISOString(),
-					};
-					const statusMessage = task.status.message;
-					if (statusMessage) {
-						task.history = [...(task.history ?? []), statusMessage];
+					const wasActive = task.status.state === "working" && this.getA2AState().activeTaskId === task.id;
+					cancelA2ATask(task);
+					this.emitA2ATaskChanged(task);
+					if (wasActive) {
+						await this.runtime.session.abort();
 					}
 				}
-				return { task: omitA2ATaskHistory(task, "a2a/tasks/cancel") };
+				return { task: omitA2ATaskHistory(task) };
 			}
 			default:
 				throw {
@@ -241,7 +238,7 @@ export class RuntimeIpcServer {
 		if (historyLength !== undefined && historyLength >= 0 && task.history) {
 			return { ...task, history: historyLength === 0 ? [] : task.history.slice(-historyLength) };
 		}
-		return omitA2ATaskHistory(task, "a2a/tasks/get");
+		return omitA2ATaskHistory(task);
 	}
 
 	private getExistingA2ATask(id: string): A2ATask {
@@ -285,8 +282,8 @@ export class RuntimeIpcServer {
 				timestamp: new Date().toISOString(),
 			};
 			appendTaskHistory(task, task.status.message);
+			this.emitA2ATaskChanged(task);
 			try {
-				const before = this.runtime.getSnapshot();
 				await this.runtime.session.sendCustomMessage(
 					{
 						customType: "a2a-message",
@@ -305,7 +302,7 @@ export class RuntimeIpcServer {
 					return;
 				}
 				const after = this.runtime.getSnapshot();
-				const result = extractNewAssistantText(before, after);
+				const result = extractA2AAssistantText(after, message.messageId);
 				task.status = {
 					state: "completed",
 					message: createA2AAgentMessage(task, result),
@@ -320,6 +317,7 @@ export class RuntimeIpcServer {
 					},
 				];
 				appendTaskHistory(task, task.status.message);
+				this.emitA2ATaskChanged(task);
 			} catch (error) {
 				if (task.status.state === "canceled") {
 					return;
@@ -331,6 +329,7 @@ export class RuntimeIpcServer {
 					timestamp: new Date().toISOString(),
 				};
 				appendTaskHistory(task, task.status.message);
+				this.emitA2ATaskChanged(task);
 			} finally {
 				if (state.activeTaskId === task.id) {
 					state.activeTaskId = undefined;
@@ -339,6 +338,17 @@ export class RuntimeIpcServer {
 		};
 		state.queue = state.queue.then(run, run);
 		return state.queue;
+	}
+
+	private emitA2ATaskChanged(task: A2ATask): void {
+		const metadata = typeof task.metadata === "object" && task.metadata !== null ? task.metadata : {};
+		this.runtime.emitA2ATaskChanged({
+			id: task.id,
+			contextId: task.contextId,
+			owner: typeof metadata.owner === "string" ? metadata.owner : undefined,
+			state: task.status.state,
+			timestamp: task.status.timestamp,
+		});
 	}
 }
 
@@ -389,6 +399,15 @@ function isTaskCanceled(task: A2ATask): boolean {
 	return task.status.state === "canceled";
 }
 
+function cancelA2ATask(task: A2ATask): void {
+	task.status = {
+		state: "canceled",
+		message: createA2AAgentMessage(task, "Task canceled."),
+		timestamp: new Date().toISOString(),
+	};
+	appendTaskHistory(task, task.status.message);
+}
+
 function createA2AAgentMessage(task: A2ATask, text: string): A2AMessage {
 	return {
 		kind: "message",
@@ -436,30 +455,73 @@ function formatInboundA2AMessage(message: A2AMessage, from: string | undefined):
 	return parts.join("\n");
 }
 
-function extractNewAssistantText(before: AgentRuntimeSnapshot, after: AgentRuntimeSnapshot): string {
-	const beforeIds = new Set(before.transcript.entries.map((entry) => entry.id));
+function extractA2AAssistantText(snapshot: AgentRuntimeSnapshot, messageId: string): string {
 	const messages: string[] = [];
-	for (const entry of after.transcript.entries) {
-		if (beforeIds.has(entry.id) || entry.type !== "message" || entry.message.role !== "assistant") {
+	const startIndex = snapshot.transcript.entries.findIndex(
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "a2a-message" &&
+			customEntryMatchesMessageId(entry, messageId),
+	);
+	if (startIndex === -1) {
+		return "(No assistant reply was recorded.)";
+	}
+	for (const entry of snapshot.transcript.entries.slice(startIndex + 1)) {
+		if (entry.type === "message" && entry.message.role === "assistant") {
+			const text = assistantEntryText(entry);
+			if (text.trim().length > 0) {
+				messages.push(text);
+			}
 			continue;
 		}
-		const { content } = entry.message;
-		const text =
-			typeof content === "string"
-				? content
-				: content.map((part) => ("text" in part && typeof part.text === "string" ? part.text : "")).join("");
-		if (text.trim().length > 0) {
-			messages.push(text);
+		if (
+			entry.type === "custom_message" ||
+			(entry.type === "message" && (entry.message.role === "user" || entry.message.role === "custom"))
+		) {
+			break;
 		}
 	}
 	return messages.length > 0 ? messages.join("\n\n") : "(No assistant reply was recorded.)";
 }
 
-function omitA2ATaskHistory(task: A2ATask, method: string): A2ATask {
+function customEntryMatchesMessageId(
+	entry: Extract<SessionEntry, { type: "custom_message" }>,
+	messageId: string,
+): boolean {
+	const details = entry.details;
+	if (
+		typeof details === "object" &&
+		details !== null &&
+		"messageId" in details &&
+		(details as { messageId?: unknown }).messageId === messageId
+	) {
+		return true;
+	}
+	const content =
+		typeof entry.content === "string"
+			? entry.content
+			: entry.content.map((part) => ("text" in part && typeof part.text === "string" ? part.text : "")).join("\n");
+	return content.includes(`<message-id>${xmlEscape(messageId)}</message-id>`);
+}
+
+function assistantEntryText(entry: Extract<SessionEntry, { type: "message" }>): string {
+	if (!("content" in entry.message)) {
+		return "";
+	}
+	const content = entry.message.content;
+	return typeof content === "string"
+		? content
+		: content.map((part: unknown) => (isTextPart(part) ? part.text : "")).join("");
+}
+
+function isTextPart(value: unknown): value is { text: string } {
+	return typeof value === "object" && value !== null && "text" in value && typeof value.text === "string";
+}
+
+function omitA2ATaskHistory(task: A2ATask): A2ATask {
 	if (!task.history || task.history.length === 0) {
 		return task;
 	}
-	console.error(`[a2a] omitted task history from ${method} response task=${task.id} history=${task.history.length}`);
 	const { history: _history, ...rest } = task;
 	return {
 		...rest,
@@ -469,10 +531,6 @@ function omitA2ATaskHistory(task: A2ATask, method: string): A2ATask {
 			historyLength: task.history.length,
 		},
 	};
-}
-
-function xmlEscape(text: string): string {
-	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function settleOrTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {

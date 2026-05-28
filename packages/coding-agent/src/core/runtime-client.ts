@@ -631,6 +631,7 @@ function applyRuntimeEvent(snapshot: AgentRuntimeSnapshot, event: AgentRuntimeEv
 				},
 			};
 		case "extension_event":
+		case "a2a_task_changed":
 		case "transcript_changed":
 			return next;
 	}

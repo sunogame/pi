@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { resolvePath } from "../utils/paths.ts";
 import {
+	type A2ATaskStatusSnapshot,
 	type AgentRuntimeAttachOptions,
 	type AgentRuntimeAttachResult,
 	type AgentRuntimeCapability,
@@ -149,6 +150,10 @@ export class AgentSessionRuntime {
 
 	emitExtensionRuntimeEvent(namespace: string, payload: unknown): void {
 		this.snapshotProjector.emitExtensionEvent(namespace, payload);
+	}
+
+	emitA2ATaskChanged(task: A2ATaskStatusSnapshot): void {
+		this.snapshotProjector.emitA2ATaskChanged(task);
 	}
 
 	setRebindSession(rebindSession?: (session: AgentSession) => Promise<void>): void {

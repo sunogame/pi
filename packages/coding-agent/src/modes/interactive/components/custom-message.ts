@@ -3,6 +3,8 @@ import type { Component } from "@earendil-works/pi-tui";
 import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import type { MessageRenderer } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
+import { shortId } from "../../../utils/ids.ts";
+import { readXmlTag } from "../../../utils/xml.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 
 /**
@@ -184,44 +186,49 @@ function renderA2AMessage(raw: string): Component | undefined {
 }
 
 function renderA2ATaskNotification(raw: string): Component | undefined {
-	const notification = parseA2ATaskNotification(raw);
-	if (!notification) {
+	const notifications = parseA2ATaskNotifications(raw);
+	if (notifications.length === 0) {
 		return undefined;
 	}
 
 	const container = new Container();
-	const state = notification.state ?? notification.notificationStatus ?? "updated";
-	const stateLabel =
-		state === "completed"
-			? theme.fg("success", state)
-			: state === "failed" || state === "canceled" || state === "rejected"
-				? theme.fg("error", state)
-				: theme.fg("warning", state);
-	const agent = notification.agent ? ` · ${theme.fg("accent", notification.agent)}` : "";
-	const header = `${theme.fg("accent", "●")} ${theme.fg("toolTitle", theme.bold("A2A task"))} · ${stateLabel}${agent}`;
-	container.addChild(new Text(header, 0, 0));
+	for (const [index, notification] of notifications.entries()) {
+		if (index > 0) {
+			container.addChild(new Spacer(1));
+		}
+		const state = notification.state ?? notification.notificationStatus ?? "updated";
+		const stateLabel =
+			state === "completed"
+				? theme.fg("success", state)
+				: state === "failed" || state === "canceled" || state === "rejected"
+					? theme.fg("error", state)
+					: theme.fg("warning", state);
+		const agent = notification.agent ? ` · ${theme.fg("accent", notification.agent)}` : "";
+		const header = `${theme.fg("accent", "●")} ${theme.fg("toolTitle", theme.bold("A2A task"))} · ${stateLabel}${agent}`;
+		container.addChild(new Text(header, 0, 0));
 
-	const body = notification.artifact || notification.message;
-	if (body) {
-		container.addChild(
-			new Text(
-				body
-					.trimEnd()
-					.split("\n")
-					.map((line) => `  ${theme.fg("customMessageText", line)}`)
-					.join("\n"),
-				0,
-				0,
-			),
-		);
-	}
+		const body = notification.artifact || notification.message;
+		if (body) {
+			container.addChild(
+				new Text(
+					body
+						.trimEnd()
+						.split("\n")
+						.map((line) => `  ${theme.fg("customMessageText", line)}`)
+						.join("\n"),
+					0,
+					0,
+				),
+			);
+		}
 
-	const meta: string[] = [];
-	if (notification.taskId) meta.push(`task ${shortId(notification.taskId)}`);
-	if (notification.contextId) meta.push(`context ${shortId(notification.contextId)}`);
-	if (notification.error) meta.push(notification.error);
-	if (meta.length > 0) {
-		container.addChild(new Text(theme.fg(notification.error ? "error" : "muted", `  ${meta.join(" · ")}`), 0, 0));
+		const meta: string[] = [];
+		if (notification.taskId) meta.push(`task ${shortId(notification.taskId)}`);
+		if (notification.contextId) meta.push(`context ${shortId(notification.contextId)}`);
+		if (notification.error) meta.push(notification.error);
+		if (meta.length > 0) {
+			container.addChild(new Text(theme.fg(notification.error ? "error" : "muted", `  ${meta.join(" · ")}`), 0, 0));
+		}
 	}
 
 	return container;
@@ -240,20 +247,25 @@ function parseA2AMessage(raw: string): A2AMessageView | undefined {
 	};
 }
 
-function parseA2ATaskNotification(raw: string): A2ATaskNotificationView | undefined {
-	if (!raw.includes("<a2a-task-notification>")) {
-		return undefined;
+function parseA2ATaskNotifications(raw: string): A2ATaskNotificationView[] {
+	const matches = raw.matchAll(/<a2a-task-notification>[\s\S]*?<\/a2a-task-notification>/g);
+	const notifications = Array.from(matches, (match) => match[0]);
+	if (notifications.length === 0) {
+		if (!raw.includes("<a2a-task-notification>")) {
+			return [];
+		}
+		notifications.push(raw);
 	}
-	return {
-		agent: readXmlTag(raw, "agent"),
-		taskId: readXmlTag(raw, "task-id"),
-		contextId: readXmlTag(raw, "context-id"),
-		notificationStatus: readXmlTag(raw, "notification-status"),
-		state: readXmlTag(raw, "state"),
-		message: readXmlTag(raw, "message"),
-		artifact: readXmlTag(raw, "artifact"),
-		error: readXmlTag(raw, "error"),
-	};
+	return notifications.map((notification) => ({
+		agent: readXmlTag(notification, "agent"),
+		taskId: readXmlTag(notification, "task-id"),
+		contextId: readXmlTag(notification, "context-id"),
+		notificationStatus: readXmlTag(notification, "notification-status"),
+		state: readXmlTag(notification, "state"),
+		message: readXmlTag(notification, "message"),
+		artifact: readXmlTag(notification, "artifact"),
+		error: readXmlTag(notification, "error"),
+	}));
 }
 
 function renderMonitorNotification(raw: string): Component | undefined {
@@ -299,10 +311,6 @@ function renderMonitorNotification(raw: string): Component | undefined {
 	return container;
 }
 
-function shortId(id: string): string {
-	return id.length > 8 ? id.slice(0, 8) : id;
-}
-
 function parseMonitorNotification(raw: string): MonitorNotificationView | undefined {
 	if (!raw.includes("<monitor-notification>")) {
 		return undefined;
@@ -316,17 +324,4 @@ function parseMonitorNotification(raw: string): MonitorNotificationView | undefi
 		error: readXmlTag(raw, "error"),
 		event: readXmlTag(raw, "event"),
 	};
-}
-
-function readXmlTag(raw: string, tag: string): string | undefined {
-	const match = raw.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
-	return match ? xmlUnescape(match[1].trim()) : undefined;
-}
-
-function xmlUnescape(text: string): string {
-	return text
-		.replace(/&quot;/g, '"')
-		.replace(/&gt;/g, ">")
-		.replace(/&lt;/g, "<")
-		.replace(/&amp;/g, "&");
 }

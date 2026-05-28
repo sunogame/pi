@@ -55,7 +55,12 @@ export function loadTeamAgentCard(spec: TeamRuntimeCardSpec, baseCwd = process.c
 		frontmatter = parseFrontmatter<AgentCardFrontmatter>(readFileSync(cardPath, "utf8")).frontmatter;
 	}
 
-	const name = readString(frontmatter.name) ?? readString(frontmatter.id) ?? readString(frontmatter.role) ?? spec.id;
+	const declaredName = readString(frontmatter.name) ?? readString(frontmatter.id) ?? readString(frontmatter.role);
+	if (declaredName && declaredName !== spec.id) {
+		const source = cardPath ?? cwd;
+		throw new Error(`A2A Agent Card name "${declaredName}" must match runtime id "${spec.id}" in ${source}`);
+	}
+	const name = spec.id;
 	const defaultInputModes = readStringArray(
 		frontmatter.defaultInputModes ??
 			frontmatter.default_input_modes ??
@@ -90,13 +95,17 @@ export function formatTeamAgentCardsForPrompt(cards: readonly PiA2AAgentCard[], 
 	}
 
 	const lines = [
-		"Peer agents are available through local A2A-style tools.",
-		"Use Agent Cards to choose the right peer agent for a question or task.",
-		"Peer agents are opaque: they do not share your private memory, filesystem, or tools. Include necessary context in your message.",
-		"Use a2a_send_message to contact a peer. It returns an A2A Task owned by the peer. Leave blocking unset for normal peer messages, especially broadcasts. Set blocking=true only when you need to wait for one specific peer before continuing.",
-		"If a2a_send_message returns a non-terminal Task, pi automatically starts an A2A task watcher and will notify you with an <a2a-task-notification> when the task reaches a terminal state. Do not start a shell monitor for A2A tasks.",
-		"Use a2a_get_task only when you need an immediate status refresh before the automatic notification arrives, or when recovering a task by id. Use a2a_cancel_task only when the remote task is no longer needed or should stop.",
-		"When you receive an <a2a-message>, answer it directly in the current turn. That assistant response completes the peer-owned Task and is returned to the sender; do not call a2a_send_message back to the sender unless you are starting a separate new task.",
+		"<a2a_rules>",
+		"Peer agents are available through A2A-style tools.",
+		"Use Agent Cards to choose the right peer. Peer agents are opaque, so include the needed context in every message.",
+		"a2a_send_message creates a peer-owned A2A Task. Non-terminal tasks are watched automatically and later produce <a2a-task-notification> runtime notifications.",
+		"<receiving>",
+		"When you receive an <a2a-message>, answer it directly in the current turn. That assistant response completes the peer-owned Task.",
+		"</receiving>",
+		"<notifications>",
+		"An <a2a-task-notification> is a runtime notification, not a human message.",
+		"</notifications>",
+		"</a2a_rules>",
 		"",
 		"<available_peer_agents>",
 	];

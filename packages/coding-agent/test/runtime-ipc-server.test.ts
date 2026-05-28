@@ -148,12 +148,22 @@ describe("RuntimeIpcServer", () => {
 	it("serves local A2A message/send and tasks/get", async () => {
 		const { clientTransport, serverTransport } = createTransportPair();
 		const runtime = createFakeRuntime(snapshot(1, "idle"));
-		runtime.sendCustomMessage.mockImplementation(async () => {
+		runtime.sendCustomMessage.mockImplementation(async (message) => {
 			runtime.currentSnapshot = snapshot(2, "idle", {
 				entries: [
 					{
-						id: "assistant-1",
+						id: "a2a-message-1",
 						parentId: null,
+						type: "custom_message",
+						customType: "a2a-message",
+						content: message.content,
+						display: true,
+						details: message.details,
+						timestamp: new Date().toISOString(),
+					},
+					{
+						id: "assistant-1",
+						parentId: "a2a-message-1",
 						type: "message",
 						timestamp: new Date().toISOString(),
 						message: {
@@ -186,6 +196,11 @@ describe("RuntimeIpcServer", () => {
 			{ triggerTurn: true },
 		);
 		expect(task.status.state).toBe("completed");
+		expect(runtime.emitA2ATaskChanged.mock.calls.map(([event]) => event.state)).toEqual([
+			"submitted",
+			"working",
+			"completed",
+		]);
 		expect(task.artifacts?.[0]?.parts[0]).toEqual({ kind: "text", text: "backend answer" });
 		expect(task.history).toBeUndefined();
 		expect(task.metadata).toMatchObject({ historyOmitted: true, historyLength: 3 });
@@ -200,6 +215,72 @@ describe("RuntimeIpcServer", () => {
 			id: task.id,
 			history: [{ role: "agent" }],
 		});
+		client.close();
+	});
+
+	it("captures only the assistant segment for the current A2A message", async () => {
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle"));
+		runtime.sendCustomMessage.mockImplementation(async (message) => {
+			runtime.currentSnapshot = snapshot(2, "idle", {
+				entries: [
+					{
+						id: "a2a-message-1",
+						parentId: null,
+						type: "custom_message",
+						customType: "a2a-message",
+						content: message.content,
+						display: true,
+						details: message.details,
+						timestamp: new Date().toISOString(),
+					},
+					{
+						id: "assistant-1",
+						parentId: "a2a-message-1",
+						type: "message",
+						timestamp: new Date().toISOString(),
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "answer for peer" }],
+						} as unknown as AgentMessage,
+					},
+					{
+						id: "user-steer-1",
+						parentId: "assistant-1",
+						type: "message",
+						timestamp: new Date().toISOString(),
+						message: {
+							role: "user",
+							content: [{ type: "text", text: "local steer" }],
+						} as unknown as AgentMessage,
+					},
+					{
+						id: "assistant-2",
+						parentId: "user-steer-1",
+						type: "message",
+						timestamp: new Date().toISOString(),
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "answer for local user" }],
+						} as unknown as AgentMessage,
+					},
+				],
+			});
+		});
+		createRuntimeIpcServer(runtime.host, serverTransport);
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		const task = await client.a2aSendMessage({
+			message: {
+				kind: "message",
+				messageId: "msg-1",
+				role: "user",
+				parts: [{ kind: "text", text: "hello" }],
+			},
+			configuration: { blocking: true },
+		});
+
+		expect(task.artifacts?.[0]?.parts[0]).toEqual({ kind: "text", text: "answer for peer" });
 		client.close();
 	});
 
@@ -292,6 +373,74 @@ describe("RuntimeIpcServer", () => {
 		client.close();
 	});
 
+	it("marks active A2A tasks canceled before awaiting abort", async () => {
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle"));
+		let releasePrompt: (() => void) | undefined;
+		let releaseAbort: (() => void) | undefined;
+		runtime.sendCustomMessage.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					releasePrompt = resolve;
+				}),
+		);
+		runtime.abort.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					releaseAbort = resolve;
+				}),
+		);
+		createRuntimeIpcServer(runtime.host, serverTransport);
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		const task = await client.a2aSendMessage({
+			message: {
+				kind: "message",
+				messageId: "msg-1",
+				role: "user",
+				parts: [{ kind: "text", text: "active" }],
+			},
+			configuration: { blocking: false },
+		});
+		await tick();
+		await expect(client.a2aGetTask({ id: task.id })).resolves.toMatchObject({ status: { state: "working" } });
+
+		const cancelPromise = client.a2aCancelTask({ id: task.id });
+		await tick();
+		expect(runtime.abort).toHaveBeenCalledTimes(1);
+		await expect(client.a2aGetTask({ id: task.id })).resolves.toMatchObject({ status: { state: "canceled" } });
+
+		releaseAbort?.();
+		const canceled = await cancelPromise;
+		expect(canceled.status.state).toBe("canceled");
+		releasePrompt?.();
+		await tick();
+		client.close();
+	});
+
+	it("rejects A2A taskId continuation until input-required is supported", async () => {
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle"));
+		createRuntimeIpcServer(runtime.host, serverTransport);
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		await expect(
+			client.a2aSendMessage({
+				message: {
+					kind: "message",
+					messageId: "msg-1",
+					role: "user",
+					taskId: "task-1",
+					parts: [{ kind: "text", text: "follow up" }],
+				},
+				configuration: { blocking: false },
+			}),
+		).rejects.toThrow("taskId continuation is not supported yet");
+
+		expect(runtime.sendCustomMessage).not.toHaveBeenCalled();
+		client.close();
+	});
+
 	it("returns an IPC error for unknown local A2A tasks", async () => {
 		const { clientTransport, serverTransport } = createTransportPair();
 		const runtime = createFakeRuntime(snapshot(1, "idle"));
@@ -324,6 +473,7 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 	compact: ReturnType<typeof vi.fn>;
 	stopMonitor: ReturnType<typeof vi.fn>;
 	abort: ReturnType<typeof vi.fn>;
+	emitA2ATaskChanged: ReturnType<typeof vi.fn>;
 	currentSnapshot: AgentRuntimeSnapshot;
 	listener?: (event: AgentRuntimeEvent) => void;
 } {
@@ -348,12 +498,14 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 		newSession: vi.fn(async () => ({ cancelled: false })),
 		compact: vi.fn(async () => ({ summary: "compacted" })),
 		stopMonitor: vi.fn(() => ({ id: "m_123" })),
+		emitA2ATaskChanged: vi.fn(),
 	};
 
 	return {
 		host: {
 			getSnapshot: () => fake.currentSnapshot,
 			attachRuntime: fake.attachRuntime,
+			emitA2ATaskChanged: fake.emitA2ATaskChanged,
 			newSession: fake.newSession,
 			session: {
 				prompt: fake.prompt,
@@ -373,6 +525,7 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 		newSession: fake.newSession,
 		compact: fake.compact,
 		stopMonitor: fake.stopMonitor,
+		emitA2ATaskChanged: fake.emitA2ATaskChanged,
 		get currentSnapshot() {
 			return fake.currentSnapshot;
 		},

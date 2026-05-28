@@ -94,6 +94,7 @@ describe("Agent runtime snapshot", () => {
 		expect(snapshot.protocolVersion).toBe(1);
 		expect(snapshot.capabilities).toContain("event_replay");
 		expect(snapshot.capabilities).toContain("extension_events");
+		expect(snapshot.capabilities).toContain("a2a");
 		expect(snapshot.eventCursor).toBe(0);
 		expect(snapshot.agent.agentId).toBe("backend");
 		expect(snapshot.agent.agentLabel).toBe("Backend");
@@ -352,6 +353,34 @@ describe("Agent runtime snapshot", () => {
 				(entry) => entry.type === "custom_message" && entry.customType === "monitor-notification",
 			),
 		).toBe(true);
+	});
+
+	it("projects A2A task status events", async () => {
+		const { runtimeHost } = await createRuntimeHost();
+		const client = createInProcessRuntimeClient(runtimeHost);
+		const events: AgentRuntimeEvent[] = [];
+		client.store.subscribe((_snapshot, event) => {
+			if (event) {
+				events.push(event);
+			}
+		});
+		await client.attach();
+
+		runtimeHost.emitA2ATaskChanged({
+			id: "task-1",
+			contextId: "context-1",
+			owner: "backend",
+			state: "completed",
+			timestamp: "2026-05-28T00:00:00.000Z",
+		});
+
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "a2a_task_changed",
+				task: expect.objectContaining({ id: "task-1", state: "completed" }),
+			}),
+		);
+		expect(client.store.snapshot.eventCursor).toBe(events.at(-1)?.id);
 	});
 });
 

@@ -1006,8 +1006,9 @@ export class AgentSession {
 		this._notificationDrainInProgress = true;
 		try {
 			while (!this.isStreaming && this._runtimeNotifications.length > 0) {
-				const notification = this._runtimeNotifications.shift();
-				if (!notification) break;
+				const notifications = this._shiftRuntimeNotificationBatch();
+				if (notifications.length === 0) break;
+				const notification = this._formatRuntimeNotificationBatch(notifications);
 				try {
 					await this.sendCustomMessage(
 						{
@@ -1018,9 +1019,11 @@ export class AgentSession {
 						},
 						{ triggerTurn: true },
 					);
-					this._emit({ type: "notification_delivered", notificationId: notification.id });
+					for (const delivered of notifications) {
+						this._emit({ type: "notification_delivered", notificationId: delivered.id });
+					}
 				} catch {
-					this._runtimeNotifications.unshift(notification);
+					this._runtimeNotifications.unshift(...notifications);
 					this._notificationDrainBlocked = true;
 					break;
 				}
@@ -1031,6 +1034,41 @@ export class AgentSession {
 				this._scheduleRuntimeNotificationDrain();
 			}
 		}
+	}
+
+	private _shiftRuntimeNotificationBatch(): RuntimeNotification[] {
+		const first = this._runtimeNotifications.shift();
+		if (!first) {
+			return [];
+		}
+		if (first.kind !== "a2a") {
+			return [first];
+		}
+		const batch = [first];
+		while (this._runtimeNotifications[0]?.kind === "a2a") {
+			const next = this._runtimeNotifications.shift();
+			if (!next) break;
+			batch.push(next);
+		}
+		return batch;
+	}
+
+	private _formatRuntimeNotificationBatch(notifications: RuntimeNotification[]): RuntimeNotification {
+		if (notifications.length <= 1) {
+			return notifications[0]!;
+		}
+		const first = notifications[0]!;
+		if (first.kind !== "a2a") {
+			return first;
+		}
+		return {
+			id: first.id,
+			kind: "a2a",
+			customType: "a2a-task-notification",
+			createdAt: first.createdAt,
+			source: { batchSize: String(notifications.length) },
+			text: notifications.map((notification) => notification.text).join("\n\n"),
+		};
 	}
 
 	private async _handlePostAgentRun(): Promise<boolean> {

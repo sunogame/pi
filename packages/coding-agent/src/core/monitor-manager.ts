@@ -13,6 +13,7 @@ import {
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../utils/shell.ts";
+import { xmlEscape } from "../utils/xml.ts";
 
 export type MonitorStatus = "running" | "completed" | "failed" | "stopped";
 
@@ -343,10 +344,6 @@ function truncateBytes(text: string, maxBytes: number): string {
 		return text;
 	}
 	return `${buffer.subarray(0, Math.max(0, maxBytes - 20)).toString("utf8")}...[truncated]`;
-}
-
-function xmlEscape(text: string): string {
-	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function formatMonitorNotification(

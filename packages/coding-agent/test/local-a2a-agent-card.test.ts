@@ -32,6 +32,25 @@ description: Handles APIs and persistence.
 		]);
 	});
 
+	it("rejects frontmatter names that do not match the runtime id", ({ task }) => {
+		const root = join("/tmp", `pi-a2a-mismatch-${task.id}`);
+		const backend = join(root, "backend");
+		mkdirSync(backend, { recursive: true });
+		writeFileSync(
+			join(backend, "AGENTS.md"),
+			`---
+name: backend-srv
+description: Handles APIs.
+---
+`,
+			"utf8",
+		);
+
+		expect(() => loadTeamAgentCards([{ id: "backend", cwd: "./backend" }], root)).toThrow(
+			'must match runtime id "backend"',
+		);
+	});
+
 	it("formats a concise prompt block without exposing url or skills", () => {
 		const prompt = formatTeamAgentCardsForPrompt(
 			[
@@ -50,7 +69,9 @@ description: Handles APIs and persistence.
 		);
 
 		expect(prompt).toContain('<agent_card name="backend" self="true">');
+		expect(prompt).toContain("<a2a_rules>");
 		expect(prompt).toContain("<description>Handles APIs.</description>");
+		expect(prompt).not.toContain("local A2A");
 		expect(prompt).not.toContain("pi-runtime://backend");
 		expect(prompt).not.toContain("<skills>");
 	});

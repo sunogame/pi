@@ -26,6 +26,7 @@ export type AgentRuntimeCapability =
 	| "runtime_commands"
 	| "prompt"
 	| "abort"
+	| "a2a"
 	| "input_required"
 	| "approval"
 	| string;
@@ -146,6 +147,25 @@ export interface RuntimeCommandSnapshot {
 	sourceInfo: SourceInfo;
 }
 
+export type A2ARuntimeTaskState =
+	| "submitted"
+	| "working"
+	| "input-required"
+	| "completed"
+	| "canceled"
+	| "failed"
+	| "rejected"
+	| "auth-required"
+	| "unknown";
+
+export interface A2ATaskStatusSnapshot {
+	id: string;
+	contextId: string;
+	owner?: string;
+	state: A2ARuntimeTaskState;
+	timestamp?: string;
+}
+
 export interface AgentRuntimeSnapshot {
 	protocolVersion: 1;
 	capabilities: AgentRuntimeCapability[];
@@ -179,6 +199,7 @@ export type AgentRuntimeEvent =
 	| { id: number; type: "monitor_ended"; monitor: MonitorTaskSnapshot }
 	| { id: number; type: "notification_queued"; notification: RuntimeNotification }
 	| { id: number; type: "notification_delivered"; notificationId: string }
+	| { id: number; type: "a2a_task_changed"; task: A2ATaskStatusSnapshot }
 	| { id: number; type: "approval_requested"; approval: PendingApprovalSnapshot }
 	| { id: number; type: "approval_resolved"; approvalId: string }
 	| { id: number; type: "input_required"; input: InputRequiredSnapshot }
@@ -379,6 +400,7 @@ export class AgentRuntimeSnapshotProjector {
 			"runtime_commands",
 			"prompt",
 			"abort",
+			"a2a",
 		];
 		this.status = statusFromSession(session);
 		this.subscribeToSession(session);
@@ -434,6 +456,10 @@ export class AgentRuntimeSnapshotProjector {
 
 	emitExtensionEvent(namespace: string, payload: unknown): void {
 		this.emit({ type: "extension_event", namespace, payload });
+	}
+
+	emitA2ATaskChanged(task: A2ATaskStatusSnapshot): void {
+		this.emit({ type: "a2a_task_changed", task });
 	}
 
 	private hasCompleteEventsAfter(eventId: number | undefined): boolean {

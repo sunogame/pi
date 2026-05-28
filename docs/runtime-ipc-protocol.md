@@ -136,6 +136,7 @@ Phase 3 baseline capabilities:
   `executeCommand` are available.
 - `prompt`: `prompt` is available.
 - `abort`: `abort` is available.
+- `a2a`: A2A message/task methods are available on the runtime IPC server.
 
 Reserved future capabilities:
 
@@ -164,6 +165,25 @@ Command list changes are first-class:
 `RuntimeCommandSnapshot.placement` distinguishes `runtime` from `legacy`.
 Remote clients may show `legacy` commands as unavailable unless
 `legacy_extensions` is advertised.
+
+A2A task status changes are task-scoped runtime events:
+
+```ts
+{
+  id: number;
+  type: "a2a_task_changed";
+  task: {
+    id: string;
+    contextId: string;
+    owner?: string;
+    state: "submitted" | "working" | "completed" | "failed" | "canceled" | string;
+    timestamp?: string;
+  };
+}
+```
+
+Clients must match by `task.id`; runtime `status_changed: "idle"` is not a
+valid substitute for task completion.
 
 ## Attach Replay
 

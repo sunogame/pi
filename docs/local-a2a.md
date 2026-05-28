@@ -33,8 +33,10 @@ description: Backend agent. Handles APIs, database schema, persistence bugs, and
 }
 ```
 
-If `name` is omitted, pi uses the runtime id. `description` is deliberately
-free-form; it should tell peers when this agent is the right target.
+If `name` is omitted, pi uses the runtime id. If `name` is present, it must
+match the runtime id; pi fails fast on mismatches so model-visible routing names
+cannot drift from registry ids. `description` is deliberately free-form; it
+should tell peers when this agent is the right target.
 
 pi also parses these A2A-style fields when present, but the default prompt only
 discloses the fields the model needs for routing:
@@ -57,14 +59,17 @@ each runtime. The runtime reads all configured `AGENTS.md` frontmatter blocks
 and appends a concise discovery section to the system prompt:
 
 ```xml
-Peer agents are available through local A2A-style tools.
-Use Agent Cards to choose the right peer agent for a question or task.
-Peer agents are opaque: they do not share your private memory, filesystem, or tools. Include necessary context in your message.
-Use a2a_send_message to contact a peer. It returns an A2A Task owned by the peer. Leave blocking unset for normal peer messages, especially broadcasts. Set blocking=true only when you need to wait for one specific peer before continuing.
-If a2a_send_message returns a non-terminal Task, pi automatically starts an A2A task watcher and notifies the sender with an <a2a-task-notification> when the task reaches a terminal state. Do not start a shell monitor for A2A tasks.
-Use a2a_get_task only when you need an immediate status refresh before the automatic notification arrives, or when recovering a task by id.
-Use a2a_cancel_task only when the remote task is no longer needed or should stop.
-When you receive an <a2a-message>, answer it directly in the current turn. That assistant response completes the peer-owned Task and is returned to the sender.
+<a2a_rules>
+Peer agents are available through A2A-style tools.
+Use Agent Cards to choose the right peer. Peer agents are opaque, so include the needed context in every message.
+a2a_send_message creates a peer-owned A2A Task. Non-terminal tasks are watched automatically and later produce <a2a-task-notification> runtime notifications.
+<receiving>
+When you receive an <a2a-message>, answer it directly in the current turn. That assistant response completes the peer-owned Task.
+</receiving>
+<notifications>
+An <a2a-task-notification> is a runtime notification, not a human message.
+</notifications>
+</a2a_rules>
 
 <available_peer_agents>
   <agent_card name="backend">
@@ -105,11 +110,14 @@ Do not start a shell `monitor` for A2A tasks. If an immediate task runs longer t
 waiting for the automatic notification or fetch status with `a2a_get_task`.
 
 When `a2a_send_message` returns a non-terminal task, pi automatically starts a
-local A2A task watcher in the sender runtime. The tool result includes
+A2A task watcher in the sender runtime. The tool result includes
 `autoWatcher.status: "started"`, and the sender later receives an
 `a2a-task-notification` custom message when the peer task reaches a terminal
 state or the watcher times out. This notification triggers a normal follow-up
 turn, so the sender model can react without remembering to poll manually.
+The watcher attaches to the peer runtime and listens for task-scoped
+`a2a_task_changed` events; it does not infer task completion from generic
+runtime idle/running state.
 
 Use `a2a_get_task` with `{ agent, taskId }` only for immediate status refreshes
 or recovery by id. The task is owned by the receiving runtime, not by the
@@ -130,11 +138,12 @@ starting a separate new task.
 
 ## Current Limits
 
-This is a local IPC implementation, not a full HTTP A2A server. It currently
+This transport is IPC-based, not a full HTTP A2A server. It currently
 supports text messages and text artifacts. `message/stream`, `tasks/resubscribe`,
-`tasks/list`, push notifications, auth-required flows, and remote HTTP Agent
-Cards are future extensions. Task history currently contains the submitted user
-message plus status messages and final text artifacts, not the full underlying
-pi transcript. Task records are in-memory in the receiving runtime process in
-this first version; restarting that runtime clears its local task records, while
-the underlying transcript remains in the normal pi session history.
+`tasks/list`, task continuation by `taskId`, structured `input-required`, push
+notifications, auth-required flows, and remote HTTP Agent Cards are future
+extensions. Task history currently contains the submitted user message plus
+status messages and final text artifacts, not the full underlying pi transcript.
+Task records are in-memory in the receiving runtime process in this first
+version; restarting that runtime clears its task records, while the underlying
+transcript remains in the normal pi session history.

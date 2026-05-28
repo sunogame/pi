@@ -3,6 +3,8 @@ import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { getAgentDir } from "../config.ts";
 import type { Theme } from "../modes/interactive/theme/theme.ts";
+import { shortId } from "../utils/ids.ts";
+import { xmlEscape } from "../utils/xml.ts";
 import {
 	formatRelativeCardPath,
 	loadTeamAgentCards,
@@ -110,7 +112,6 @@ const sendMessageSchema = Type.Object({
 		maxLength: 65536,
 	}),
 	contextId: Type.Optional(Type.String({ description: "Optional A2A contextId for continuing related work." })),
-	taskId: Type.Optional(Type.String({ description: "Optional A2A taskId when adding input to an existing task." })),
 	blocking: Type.Optional(
 		Type.Boolean({
 			description:
@@ -195,10 +196,6 @@ function compactPreview(text: string, maxLength: number): string {
 	return `${compact.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
-function shortId(id: string): string {
-	return id.length > 8 ? id.slice(0, 8) : id;
-}
-
 function textComponent(text: string, context: { lastComponent?: unknown }): Text {
 	const component = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 	component.setText(text);
@@ -213,8 +210,8 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 		defineTool({
 			name: "a2a_list_agent_cards",
 			label: "A2A list agents",
-			description: "List A2A-style Agent Cards for peer agents in the local pi runtime team.",
-			promptSnippet: "a2a_list_agent_cards: list peer Agent Cards for local A2A routing.",
+			description: "List A2A-style Agent Cards for peer agents in the pi runtime team.",
+			promptSnippet: "a2a_list_agent_cards: list peer Agent Cards for A2A routing.",
 			parameters: listAgentCardsSchema,
 			async execute(): Promise<AgentToolResult<{ cards: PiA2AAgentCard[] }>> {
 				const cards = getCards();
@@ -225,14 +222,14 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 			name: "a2a_send_message",
 			label: "A2A send message",
 			description:
-				"Send an A2A-style text message to a peer local runtime. Returns an A2A Task owned by the target agent.",
+				"Send an A2A-style text message to a peer runtime. Returns an A2A Task owned by the target agent.",
 			promptSnippet: "a2a_send_message: send a message to a peer agent; returns an A2A Task.",
 			promptGuidelines: [
 				"Use a2a_send_message only when a peer Agent Card indicates it is a better fit for a focused question or task.",
 				"Peer agents are opaque and do not share your private memory; include the necessary context in the message.",
-				"When you receive an <a2a-message>, answer it directly in the current turn. Your assistant response completes the sender's Task; do not call a2a_send_message back unless you need to start a separate new task.",
-				"blocking=true is only an immediate-start optimization; queued tasks return without waiting to avoid deadlocks.",
 				"When a2a_send_message returns a non-terminal Task, pi automatically starts an A2A task watcher and will notify you when the task reaches a terminal state. Do not start a shell monitor for A2A tasks.",
+				"blocking=true is only an immediate-start optimization; queued tasks return without waiting to avoid deadlocks.",
+				"When you receive an <a2a-message>, answer it directly in the current turn. Your assistant response completes the sender's Task; do not call a2a_send_message back unless you need to start a separate new task.",
 				"Use a2a_get_task only when you need an immediate status refresh before the automatic notification arrives, or when recovering a task by id.",
 			],
 			parameters: sendMessageSchema,
@@ -247,7 +244,6 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 						messageId: randomUUID(),
 						role: "user",
 						parts: [{ kind: "text", text: params.text }],
-						taskId: params.taskId,
 						contextId: params.contextId,
 					},
 					configuration: {
@@ -272,6 +268,10 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 			label: "A2A get task",
 			description: "Fetch an A2A Task from the peer agent runtime that owns it.",
 			promptSnippet: "a2a_get_task: fetch status and results for a peer-owned A2A Task.",
+			promptGuidelines: [
+				"Use a2a_get_task only for an immediate status refresh or when recovering a task by id.",
+				"If a2a_send_message already started an automatic watcher, prefer waiting for the a2a-task-notification instead of polling repeatedly.",
+			],
 			parameters: getTaskSchema,
 			executionMode: "sequential",
 			async execute(_toolCallId, params: Static<typeof getTaskSchema>): Promise<AgentToolResult<{ task: A2ATask }>> {
@@ -293,6 +293,10 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 			label: "A2A cancel task",
 			description: "Request cancellation of an A2A Task owned by a peer agent runtime.",
 			promptSnippet: "a2a_cancel_task: cancel a peer-owned A2A Task when it is no longer needed.",
+			promptGuidelines: [
+				"Use a2a_cancel_task only when the remote task is no longer needed or should stop.",
+				"Do not use cancel to mark work done; completion is controlled by the peer runtime.",
+			],
 			parameters: cancelTaskSchema,
 			executionMode: "sequential",
 			async execute(
@@ -319,7 +323,7 @@ async function sendA2AMessage(
 	params: Omit<A2AMessageSendParams, "to">,
 ): Promise<A2ATask> {
 	if (selfName && to === selfName) {
-		throw new Error(`Refusing to send local A2A message from ${selfName} to itself`);
+		throw new Error(`Refusing to send A2A message from ${selfName} to itself`);
 	}
 	const client = await connectA2AClient(agentDir, to);
 	try {
@@ -435,45 +439,82 @@ function maybeStartA2ATaskWatcher(
 		return true;
 	}
 	activeA2ATaskWatchers.add(key);
-	const pollIntervalMs = Math.max(500, options.taskPollIntervalMs ?? 2000);
-	const deadline = Date.now() + 10 * 60 * 1000;
+	void watchA2ATaskByEvent(agentDir, agent, task, key, options);
+	return true;
+}
 
-	const poll = async () => {
-		try {
-			const next = await getA2ATask(agentDir, agent, { id: task.id, historyLength: 0 });
-			if (isTerminalA2ATask(next)) {
-				activeA2ATaskWatchers.delete(key);
-				options.onRuntimeNotification?.(createA2ATaskNotification(agent, next));
-				return;
-			}
-			if (Date.now() >= deadline) {
-				activeA2ATaskWatchers.delete(key);
-				options.onRuntimeNotification?.(
-					createA2ATaskNotification(agent, next, "watcher-timeout", "A2A task monitor timed out."),
-				);
-				return;
-			}
-		} catch (error) {
-			activeA2ATaskWatchers.delete(key);
-			options.onRuntimeNotification?.(
-				createA2ATaskNotification(
-					agent,
-					task,
-					"watcher-error",
-					error instanceof Error ? error.message : String(error),
-				),
-			);
+async function watchA2ATaskByEvent(
+	agentDir: string,
+	agent: string,
+	task: A2ATask,
+	key: string,
+	options: LocalA2AToolsOptions,
+): Promise<void> {
+	let client: Awaited<ReturnType<typeof connectA2AClient>> | undefined;
+	let lastKnownTask = task;
+	let done = false;
+	const finish = (next: A2ATask, notificationStatus = "terminal", error?: string) => {
+		if (done) {
 			return;
 		}
-		setTimeout(() => {
-			void poll();
-		}, pollIntervalMs).unref?.();
+		done = true;
+		clearTimeout(timeout);
+		activeA2ATaskWatchers.delete(key);
+		client?.detach();
+		client?.close();
+		options.onRuntimeNotification?.(createA2ATaskNotification(agent, next, notificationStatus, error));
 	};
+	const timeout = setTimeout(
+		() => {
+			void (async () => {
+				try {
+					if (client) {
+						lastKnownTask = await client.a2aGetTask({ id: task.id, historyLength: 0 });
+					}
+				} catch {
+					// Keep the last known task for the timeout notification.
+				}
+				finish(lastKnownTask, "watcher-timeout", "A2A task monitor timed out.");
+			})();
+		},
+		10 * 60 * 1000,
+	);
+	timeout.unref?.();
 
-	setTimeout(() => {
-		void poll();
-	}, pollIntervalMs).unref?.();
-	return true;
+	try {
+		client = await connectA2AClient(agentDir, agent);
+		await client.attach({
+			listener: (event) => {
+				if (event.type !== "a2a_task_changed" || event.task.id !== task.id) {
+					return;
+				}
+				lastKnownTask = {
+					...lastKnownTask,
+					status: {
+						...lastKnownTask.status,
+						state: event.task.state,
+						timestamp: event.task.timestamp,
+					},
+				};
+				if (TERMINAL_A2A_STATES.has(event.task.state)) {
+					void (async () => {
+						try {
+							lastKnownTask = (await client?.a2aGetTask({ id: task.id, historyLength: 0 })) ?? lastKnownTask;
+							finish(lastKnownTask);
+						} catch (error) {
+							finish(lastKnownTask, "watcher-error", error instanceof Error ? error.message : String(error));
+						}
+					})();
+				}
+			},
+		});
+		lastKnownTask = await client.a2aGetTask({ id: task.id, historyLength: 0 });
+		if (isTerminalA2ATask(lastKnownTask)) {
+			finish(lastKnownTask);
+		}
+	} catch (error) {
+		finish(task, "watcher-error", error instanceof Error ? error.message : String(error));
+	}
 }
 
 function isTerminalA2ATask(task: A2ATask): boolean {
@@ -522,10 +563,6 @@ function formatA2ATaskNotification(agent: string, task: A2ATask, notificationSta
 	}
 	parts.push("</a2a-task-notification>");
 	return parts.join("\n");
-}
-
-function xmlEscape(text: string): string {
-	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function textResult<T>(text: string, details: T): AgentToolResult<T> {
