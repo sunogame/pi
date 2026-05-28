@@ -109,6 +109,7 @@ describe("Agent runtime snapshot", () => {
 		expect(snapshot.run.pendingApprovals).toEqual([]);
 		expect(snapshot.run.pendingUserMessages).toEqual([]);
 		expect(snapshot.tools.active.length).toBeGreaterThan(0);
+		expect(snapshot.tools.active).toContain("monitor");
 		expect(snapshot.resources.skills).toEqual([]);
 		expect(snapshot.resources.promptTemplates).toEqual([]);
 		expect(snapshot.config.autoCompaction).toBeTypeOf("boolean");

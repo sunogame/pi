@@ -1,5 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
+import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import type { MonitorManager, MonitorTaskSnapshot } from "../monitor-manager.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -25,6 +27,39 @@ const monitorSchema = Type.Object({
 
 export type MonitorToolInput = Static<typeof monitorSchema>;
 export type MonitorToolDetails = MonitorTaskSnapshot;
+
+function formatMonitorCall(args: Partial<MonitorToolInput> | undefined, theme: Theme): string {
+	const description = args?.description?.trim();
+	const label = description ? theme.fg("accent", description) : theme.fg("toolOutput", "...");
+	const suffix = args?.persistent ? theme.fg("muted", " persistent") : "";
+	return `${theme.fg("toolTitle", theme.bold("monitor"))} ${label}${suffix}`;
+}
+
+function formatMonitorResult(details: MonitorTaskSnapshot | undefined, theme: Theme): string {
+	if (!details) {
+		return theme.fg("toolOutput", "Monitor started");
+	}
+	const status =
+		details.status === "running"
+			? theme.fg("success", "started")
+			: details.status === "failed"
+				? theme.fg("error", "failed")
+				: details.status === "stopped"
+					? theme.fg("warning", "stopped")
+					: theme.fg("success", "completed");
+	const pieces = [
+		`${theme.fg("toolTitle", theme.bold("Monitor"))} ${status}`,
+		theme.fg("muted", details.id),
+		theme.fg("muted", details.outputFile),
+	];
+	if (details.exitCode !== undefined) {
+		pieces.push(theme.fg("muted", `exit ${details.exitCode}`));
+	}
+	if (details.error) {
+		pieces.push(theme.fg("error", details.error));
+	}
+	return pieces.join(" · ");
+}
 
 export function createMonitorToolDefinition(
 	monitorManager?: MonitorManager,
@@ -74,6 +109,16 @@ export function createMonitorToolDefinition(
 				],
 				details: monitor,
 			};
+		},
+		renderCall(args, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			text.setText(formatMonitorCall(args, theme));
+			return text;
+		},
+		renderResult(result, _options, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			text.setText(formatMonitorResult(result.details, theme));
+			return text;
 		},
 	};
 }
