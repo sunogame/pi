@@ -3,7 +3,11 @@ import { resolve } from "node:path";
 import chalk from "chalk";
 import { APP_NAME, getAgentDir } from "./config.ts";
 import { loadTeamAgentCards } from "./core/a2a-agent-card.ts";
-import { listRuntimeRegistryEntries, readRuntimeRegistryEntry } from "./core/runtime-registry.ts";
+import {
+	listRuntimeRegistryEntries,
+	readRuntimeRegistryEntry,
+	readRuntimeStateEntry,
+} from "./core/runtime-registry.ts";
 import { type RuntimeStartOptions, startRuntime, stopRuntime } from "./runtime-cli.ts";
 
 export interface RuntimeSpec {
@@ -64,10 +68,19 @@ export function loadSupervisorConfig(configPath = defaultSupervisorConfigPath())
 	return parsed;
 }
 
-export function runtimeSpecToStartOptions(spec: RuntimeSpec, configPath?: string): RuntimeStartOptions {
+export function runtimeSpecToStartOptions(
+	spec: RuntimeSpec,
+	configPath?: string,
+	agentDir = getAgentDir(),
+): RuntimeStartOptions {
 	const runtimeArgs = [...(spec.args ?? [])];
 	if (!hasSessionSelectionFlag(runtimeArgs)) {
-		runtimeArgs.push("--continue");
+		const state = readRuntimeStateEntry(agentDir, spec.id);
+		if (state?.sessionFile && existsSync(state.sessionFile)) {
+			runtimeArgs.push("--session", state.sessionFile);
+		} else {
+			runtimeArgs.push("--continue");
+		}
 	}
 	if (spec.model) {
 		runtimeArgs.push("--model", spec.model);
@@ -172,7 +185,7 @@ ${chalk.bold("Config:")}
     ]
   }
 
-Supervisor runtimes default to --continue so restart reattaches the most recent session.
+Supervisor runtimes restore the runtime's last known session file when available, then fall back to --continue.
 Set args to include --session, --resume, --continue, --fork, or --no-session to override session selection.`);
 }
 

@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { writeRuntimeStateEntry } from "../src/core/runtime-registry.ts";
 import {
 	handleSupervisorCommand,
 	runtimeSpecToStartOptions,
@@ -50,6 +51,32 @@ describe("supervisor CLI", () => {
 		});
 
 		expect(options.runtimeArgs).toEqual(["--session", "abc123"]);
+	});
+
+	it("uses the persisted runtime session file instead of default continue", ({ task }) => {
+		const root = join("/tmp", `pi-supervisor-state-${task.id}`);
+		const agentDir = join(root, ".pi");
+		const sessionFile = join(root, "sessions", "current.jsonl");
+		mkdirSync(join(root, "sessions"), { recursive: true });
+		writeFileSync(sessionFile, "", "utf8");
+		writeRuntimeStateEntry(agentDir, {
+			agentId: "backend",
+			cwd: root,
+			sessionId: "current",
+			sessionFile,
+			updatedAt: new Date().toISOString(),
+		});
+
+		const options = runtimeSpecToStartOptions(
+			{
+				id: "backend",
+				cwd: "./backend",
+			},
+			undefined,
+			agentDir,
+		);
+
+		expect(options.runtimeArgs).toEqual(["--session", sessionFile]);
 	});
 
 	it("documents supervisor restart in help output", async () => {

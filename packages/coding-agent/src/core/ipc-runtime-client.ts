@@ -46,7 +46,9 @@ export class IpcRuntimeClient implements RuntimeClient {
 		const result = await this.request("attach", { lastSeenEventId });
 		const inbox = this.attachInbox;
 
-		const replayRequiresSnapshot = result.initialEvents.some((event) => event.type === "transcript_changed");
+		const replayRequiresSnapshot = result.initialEvents.some(
+			(event) => event.type === "session_changed" || event.type === "transcript_changed",
+		);
 		if (!result.initialEventsComplete || options.lastSeenEventId === undefined || replayRequiresSnapshot) {
 			this.store.replaceFrom(result.snapshot);
 		} else {
@@ -86,20 +88,25 @@ export class IpcRuntimeClient implements RuntimeClient {
 
 	async executeCommand(name: string, args: string): Promise<boolean> {
 		const result = await this.request("executeCommand", { name, args });
+		await this.refreshFromRuntime();
 		return result.handled;
 	}
 
 	async newSession(): Promise<{ cancelled: boolean }> {
-		return await this.request("newSession", undefined);
+		const result = await this.request("newSession", undefined);
+		await this.refreshFromRuntime();
+		return result;
 	}
 
 	async compact(customInstructions?: string): Promise<RuntimeCompactionResult> {
 		const result = await this.request("compact", { customInstructions });
+		await this.refreshFromRuntime();
 		return result.result as RuntimeCompactionResult;
 	}
 
 	async stopMonitor(id: string): Promise<boolean> {
 		const result = await this.request("stopMonitor", { id });
+		await this.refreshFromRuntime();
 		return result.stopped;
 	}
 
@@ -142,7 +149,7 @@ export class IpcRuntimeClient implements RuntimeClient {
 			return;
 		}
 		this.liveListener?.(event);
-		if (event.type === "transcript_changed") {
+		if (event.type === "session_changed" || event.type === "transcript_changed") {
 			void this.refreshFromRuntime();
 		}
 	}

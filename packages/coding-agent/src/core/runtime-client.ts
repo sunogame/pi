@@ -167,7 +167,7 @@ export class InProcessRuntimeClient implements LocalRuntimeClient {
 		let attached = false;
 		const applyLiveEvent = (event: AgentRuntimeEvent) => {
 			this.store.apply(event);
-			if (event.type === "transcript_changed") {
+			if (event.type === "session_changed" || event.type === "transcript_changed") {
 				this.refreshFromRuntime();
 			}
 			options.listener?.(event);
@@ -184,7 +184,9 @@ export class InProcessRuntimeClient implements LocalRuntimeClient {
 			},
 		});
 
-		const replayRequiresSnapshot = result.initialEvents.some((event) => event.type === "transcript_changed");
+		const replayRequiresSnapshot = result.initialEvents.some(
+			(event) => event.type === "session_changed" || event.type === "transcript_changed",
+		);
 		if (!result.initialEventsComplete || options.lastSeenEventId === undefined || replayRequiresSnapshot) {
 			this.store.replaceFrom(result.snapshot);
 		} else {
@@ -195,7 +197,7 @@ export class InProcessRuntimeClient implements LocalRuntimeClient {
 
 		for (const event of inbox) {
 			this.store.apply(event);
-			if (event.type === "transcript_changed") {
+			if (event.type === "session_changed" || event.type === "transcript_changed") {
 				this.refreshFromRuntime();
 			}
 			options.listener?.(event);

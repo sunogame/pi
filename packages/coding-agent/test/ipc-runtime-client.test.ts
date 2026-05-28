@@ -123,6 +123,52 @@ describe("IpcRuntimeClient", () => {
 
 		expect(client.store.snapshot.session.sessionName).toBe("compacted");
 	});
+
+	it("refreshes the store after session_changed notifications", async () => {
+		const transport = new MockRuntimeTransport();
+		const client = createIpcRuntimeClient(transport, snapshot(1, "idle", { sessionName: "old" }));
+
+		transport.emit({
+			type: "runtime_event",
+			event: { id: 2, type: "session_changed", session: snapshot(2, "idle").session },
+		});
+		await tick();
+
+		const request = transport.lastRequest();
+		expect(request).toMatchObject({ method: "getSnapshot" });
+
+		transport.emit({
+			id: request.id,
+			ok: true,
+			result: { snapshot: snapshot(2, "idle", { sessionName: "new" }) },
+		});
+		await tick();
+
+		expect(client.store.snapshot.session.sessionName).toBe("new");
+	});
+
+	it("refreshes the store after newSession commands", async () => {
+		const transport = new MockRuntimeTransport();
+		const client = createIpcRuntimeClient(transport, snapshot(1, "idle", { sessionName: "old" }));
+
+		const clear = client.newSession();
+		const clearRequest = transport.lastRequest();
+		expect(clearRequest).toMatchObject({ method: "newSession" });
+
+		transport.emit({ id: clearRequest.id, ok: true, result: { cancelled: false } });
+		await tick();
+
+		const refreshRequest = transport.lastRequest();
+		expect(refreshRequest).toMatchObject({ method: "getSnapshot" });
+		transport.emit({
+			id: refreshRequest.id,
+			ok: true,
+			result: { snapshot: snapshot(2, "idle", { sessionName: "new" }) },
+		});
+
+		await expect(clear).resolves.toEqual({ cancelled: false });
+		expect(client.store.snapshot.session.sessionName).toBe("new");
+	});
 });
 
 function snapshot(

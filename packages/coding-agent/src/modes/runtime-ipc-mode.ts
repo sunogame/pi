@@ -91,7 +91,9 @@ async function runRuntimeSocketIpcMode(
 		}, 75);
 	};
 	const unsubscribeRegistryUpdates = runtimeHost.subscribeRuntimeEvents((event: AgentRuntimeEvent) => {
-		if (event.type === "status_changed" || event.type === "session_changed") {
+		if (event.type === "session_changed") {
+			writeRegistry();
+		} else if (event.type === "status_changed") {
 			scheduleRegistryWrite();
 		}
 	});
@@ -141,6 +143,7 @@ function createRegistryEntry(
 		pid: process.pid,
 		cwd: snapshot.agent.cwd,
 		sessionId: snapshot.session.sessionId,
+		sessionFile: snapshot.session.sessionFile,
 		sessionName: snapshot.session.sessionName,
 		status: snapshot.agent.status,
 		protocolVersion: snapshot.protocolVersion,
