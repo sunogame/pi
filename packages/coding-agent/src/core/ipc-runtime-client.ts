@@ -99,6 +99,11 @@ export class IpcRuntimeClient implements RuntimeClient {
 		return result.handled;
 	}
 
+	async setModel(provider: string, modelId: string): Promise<void> {
+		await this.request("setModel", { provider, modelId });
+		await this.refreshFromRuntime();
+	}
+
 	async newSession(): Promise<{ cancelled: boolean }> {
 		const result = await this.request("newSession", undefined);
 		await this.refreshFromRuntime();

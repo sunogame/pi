@@ -9,6 +9,7 @@ export type RuntimeIpcMethod =
 	| "abort"
 	| "waitForIdle"
 	| "executeCommand"
+	| "setModel"
 	| "newSession"
 	| "compact"
 	| "reload"
@@ -28,6 +29,7 @@ export type RuntimeIpcRequestParams = {
 	abort: undefined;
 	waitForIdle: undefined;
 	executeCommand: { name: string; args: string };
+	setModel: { provider: string; modelId: string };
 	newSession: undefined;
 	compact: { customInstructions?: string };
 	reload: undefined;
@@ -46,6 +48,7 @@ export type RuntimeIpcResult = {
 	abort: Record<string, never>;
 	waitForIdle: Record<string, never>;
 	executeCommand: { handled: boolean };
+	setModel: Record<string, never>;
 	newSession: { cancelled: boolean };
 	compact: { result: unknown };
 	reload: Record<string, never>;

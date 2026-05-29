@@ -1,5 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import {
+	type AutocompleteItem,
 	CombinedAutocompleteProvider,
 	Container,
 	Loader,
@@ -12,7 +13,11 @@ import {
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { APP_NAME, APP_TITLE, VERSION } from "../config.ts";
-import type { AgentRuntimeEvent, AgentRuntimeSnapshot } from "../core/agent-runtime-snapshot.ts";
+import type {
+	AgentRuntimeEvent,
+	AgentRuntimeModelSnapshot,
+	AgentRuntimeSnapshot,
+} from "../core/agent-runtime-snapshot.ts";
 import type { ToolDefinition } from "../core/extensions/types.ts";
 import { FooterDataProvider } from "../core/footer-data-provider.ts";
 import { createIpcRuntimeClient, type IpcRuntimeClient } from "../core/ipc-runtime-client.ts";
@@ -64,6 +69,7 @@ export const ATTACH_LOCAL_COMMANDS: SlashCommand[] = [
 	{ name: "broadcast", description: "Send a prompt to all registered runtimes" },
 	{ name: "new", description: "Start a new session for the attached runtime" },
 	{ name: "new-all", description: "Start a new session for all registered runtimes" },
+	{ name: "model", description: "Select model for the attached runtime" },
 	{ name: "compact", description: "Compact the attached runtime context" },
 	{ name: "reload", description: "Reload the attached runtime resources" },
 	{ name: "abort", description: "Abort the current runtime run" },
@@ -343,6 +349,10 @@ class RuntimeAttachView {
 			await this.clearAllRuntimes();
 			return true;
 		}
+		if (command.name === "model") {
+			await this.selectModel(command.args.trim());
+			return true;
+		}
 		if (command.name === "compact") {
 			await this.compactRuntime(command.args.trim());
 			return true;
@@ -387,6 +397,41 @@ class RuntimeAttachView {
 		this.showStatusMessage(
 			result.failed.length > 0 ? theme.fg("warning", parts.join("  ")) : theme.fg("accent", parts.join("  ")),
 		);
+	}
+
+	private async selectModel(modelReference: string): Promise<void> {
+		const snapshot = this.client.store.snapshot;
+		if (!modelReference) {
+			const current = formatModelReference(snapshot.agent.model);
+			const examples = snapshot.modelRegistry.available
+				.slice(0, 8)
+				.map((model) => formatModelReference(model))
+				.filter((model): model is string => Boolean(model));
+			const lines = [`current model: ${current ?? "none"}`, "usage: /model <provider>/<model>"];
+			if (examples.length > 0) {
+				lines.push(`available: ${examples.join("  ")}`);
+			}
+			if (snapshot.modelRegistry.error) {
+				lines.push(`models.json: ${snapshot.modelRegistry.error}`);
+			}
+			this.showStatusMessage(theme.fg("muted", lines.join("\n")));
+			return;
+		}
+
+		const model = findModelSnapshotMatch(modelReference, snapshot.modelRegistry.available);
+		if (!model?.provider || !model.modelId) {
+			this.showStatusMessage(theme.fg("warning", `Model not found or ambiguous: ${modelReference}`));
+			return;
+		}
+
+		try {
+			await this.client.setModel(model.provider, model.modelId);
+			this.footer.invalidate();
+			this.renderSnapshot(this.client.store.snapshot);
+			this.showStatusMessage(theme.fg("accent", `model set: ${model.provider}/${model.modelId}`));
+		} catch (error) {
+			this.setError(error);
+		}
 	}
 
 	private async clearRuntime(): Promise<void> {
@@ -705,6 +750,14 @@ class RuntimeAttachView {
 
 	private setupAutocompleteProvider(snapshot: AgentRuntimeSnapshot): void {
 		const localCommandNames = new Set(ATTACH_LOCAL_COMMANDS.map((command) => command.name));
+		const localCommands: SlashCommand[] = ATTACH_LOCAL_COMMANDS.map((command) =>
+			command.name === "model"
+				? {
+						...command,
+						getArgumentCompletions: (prefix: string) => getModelArgumentCompletions(snapshot, prefix),
+					}
+				: command,
+		);
 		const templateCommands: SlashCommand[] = snapshot.resources.promptTemplates.map((template) => ({
 			name: template.name,
 			description: template.argumentHint ? `${template.description} ${template.argumentHint}` : template.description,
@@ -730,7 +783,7 @@ class RuntimeAttachView {
 			}));
 		this.editor.setAutocompleteProvider(
 			new CombinedAutocompleteProvider(
-				[...ATTACH_LOCAL_COMMANDS, ...templateCommands, ...skillCommands, ...commands],
+				[...localCommands, ...templateCommands, ...skillCommands, ...commands],
 				snapshot.agent.cwd,
 			),
 		);
@@ -866,7 +919,7 @@ class RuntimeAttachHeader extends Container {
 			rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
 			rawKeyHint("/", "runtime commands"),
 		].join(theme.fg("muted", " · "));
-		const boundary = theme.fg("dim", "IPC attach: model/auth, session tree, and legacy extension UI are disabled.");
+		const boundary = theme.fg("dim", "IPC attach: auth, session tree, and legacy extension UI are disabled.");
 		return `${logo}\n${compactInstructions}\n${boundary}`;
 	}
 
@@ -988,6 +1041,76 @@ function formatStatus(snapshot: AgentRuntimeSnapshot): string {
 		suffixes.push(`${tools} tool${tools === 1 ? "" : "s"}`);
 	}
 	return suffixes.length > 0 ? `${status} (${suffixes.join(", ")})` : status;
+}
+
+function formatModelReference(model: AgentRuntimeModelSnapshot): string | undefined {
+	if (!model.provider || !model.modelId) {
+		return undefined;
+	}
+	return `${model.provider}/${model.modelId}`;
+}
+
+function findModelSnapshotMatch(
+	modelReference: string,
+	models: readonly AgentRuntimeModelSnapshot[],
+): AgentRuntimeModelSnapshot | undefined {
+	const normalized = modelReference.trim().toLowerCase();
+	if (!normalized) {
+		return undefined;
+	}
+
+	const canonicalMatches = models.filter((model) => formatModelReference(model)?.toLowerCase() === normalized);
+	if (canonicalMatches.length === 1) {
+		return canonicalMatches[0];
+	}
+	if (canonicalMatches.length > 1) {
+		return undefined;
+	}
+
+	const slashIndex = modelReference.indexOf("/");
+	if (slashIndex !== -1) {
+		const provider = modelReference.slice(0, slashIndex).trim().toLowerCase();
+		const modelId = modelReference
+			.slice(slashIndex + 1)
+			.trim()
+			.toLowerCase();
+		const providerMatches = models.filter(
+			(model) => model.provider?.toLowerCase() === provider && model.modelId?.toLowerCase() === modelId,
+		);
+		return providerMatches.length === 1 ? providerMatches[0] : undefined;
+	}
+
+	const idMatches = models.filter((model) => model.modelId?.toLowerCase() === normalized);
+	return idMatches.length === 1 ? idMatches[0] : undefined;
+}
+
+function getModelArgumentCompletions(snapshot: AgentRuntimeSnapshot, prefix: string): AutocompleteItem[] | null {
+	const query = prefix.trim().toLowerCase();
+	const matches = snapshot.modelRegistry.available
+		.map((model) => ({
+			model,
+			reference: formatModelReference(model),
+		}))
+		.filter((item): item is { model: AgentRuntimeModelSnapshot; reference: string } => Boolean(item.reference))
+		.filter((item) => {
+			if (!query) {
+				return true;
+			}
+			const searchable =
+				`${item.reference} ${item.model.modelId ?? ""} ${item.model.displayName ?? ""}`.toLowerCase();
+			return searchable.includes(query);
+		})
+		.slice(0, 20);
+
+	if (matches.length === 0) {
+		return null;
+	}
+
+	return matches.map(({ model, reference }) => ({
+		value: reference,
+		label: model.modelId ?? reference,
+		description: model.provider,
+	}));
 }
 
 function createPlaceholderSnapshot(cwd: string): AgentRuntimeSnapshot {

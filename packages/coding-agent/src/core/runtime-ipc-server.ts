@@ -125,6 +125,19 @@ export class RuntimeIpcServer {
 				const handled = await this.runtime.session.executeExtensionCommand(params.name, params.args);
 				return { handled };
 			}
+			case "setModel": {
+				const params = readObjectParams(request.params);
+				if (typeof params.provider !== "string" || typeof params.modelId !== "string") {
+					throw invalidParams("setModel.provider and setModel.modelId must be strings");
+				}
+				this.runtime.session.modelRegistry.refresh();
+				const model = this.runtime.session.modelRegistry.find(params.provider, params.modelId);
+				if (!model) {
+					throw invalidParams(`Model not found: ${params.provider}/${params.modelId}`);
+				}
+				await this.runtime.session.setModel(model);
+				return {};
+			}
 			case "newSession":
 				return await this.runtime.newSession();
 			case "compact": {
