@@ -151,6 +151,56 @@ function formatA2ACancelTaskCall(args: Partial<Static<typeof cancelTaskSchema>> 
 	return `${theme.fg("toolTitle", theme.bold("a2a_cancel_task"))} ${agent}/${theme.fg("muted", taskId)}`;
 }
 
+function formatA2AListAgentCardsCall(theme: Theme): string {
+	return theme.fg("toolTitle", theme.bold("a2a_list_agent_cards"));
+}
+
+function formatA2AAgentCardsForModel(cards: readonly PiA2AAgentCard[]): string {
+	if (cards.length === 0) {
+		return "No peer Agent Cards are configured.";
+	}
+	return [
+		"A2A Agent Cards:",
+		...cards.map((card) => {
+			const parts = [`- ${card.name}`];
+			const description = card.description.trim();
+			if (description) {
+				parts.push(`: ${description}`);
+			}
+			const modes = [
+				`input=${card.defaultInputModes.join(",")}`,
+				`output=${card.defaultOutputModes.join(",")}`,
+			].join(" ");
+			return `${parts.join("")}\n  ${modes}`;
+		}),
+	].join("\n");
+}
+
+function formatA2AAgentCardsResult(cards: readonly PiA2AAgentCard[] | undefined, theme: Theme): string {
+	if (!cards || cards.length === 0) {
+		return theme.fg("toolOutput", "No peer Agent Cards configured");
+	}
+	const liveAgentIds = new Set(listRuntimeRegistryEntries(getAgentDir()).map((entry) => entry.agentId));
+	const lines = [`${theme.fg("toolTitle", theme.bold("A2A agents"))} ${theme.fg("muted", String(cards.length))}`];
+	for (const card of cards) {
+		const live = liveAgentIds.has(card.name);
+		const status = live ? theme.fg("success", "live") : theme.fg("muted", "offline");
+		const path = formatRelativeCardPath(card);
+		const description = compactPreview(card.description, 120);
+		lines.push(`${theme.fg("accent", card.name)} ${status}${path ? theme.fg("muted", ` · ${path}`) : ""}`);
+		if (description) {
+			lines.push(theme.fg("toolOutput", `  ${description}`));
+		}
+		lines.push(
+			theme.fg(
+				"muted",
+				`  input ${card.defaultInputModes.join(", ")} · output ${card.defaultOutputModes.join(", ")}`,
+			),
+		);
+	}
+	return lines.join("\n");
+}
+
 function formatA2ATaskResult(task: A2ATask | undefined, theme: Theme): string {
 	if (!task) {
 		return theme.fg("toolOutput", "No task returned");
@@ -204,7 +254,10 @@ function textComponent(text: string, context: { lastComponent?: unknown }): Text
 
 export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): ToolDefinition[] {
 	const agentDir = options.agentDir ?? getAgentDir();
-	const getCards = () => loadTeamAgentCards(options.teamSpecs, options.configBaseCwd);
+	const getCards = () => {
+		const cards = loadTeamAgentCards(options.teamSpecs, options.configBaseCwd);
+		return options.selfName ? cards.filter((card) => card.name !== options.selfName) : cards;
+	};
 
 	return [
 		defineTool({
@@ -215,7 +268,13 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 			parameters: listAgentCardsSchema,
 			async execute(): Promise<AgentToolResult<{ cards: PiA2AAgentCard[] }>> {
 				const cards = getCards();
-				return textResult(JSON.stringify({ agents: cards.map(toPublicCard) }, null, 2), { cards });
+				return textResult(formatA2AAgentCardsForModel(cards), { cards });
+			},
+			renderCall(_args, theme, context) {
+				return textComponent(formatA2AListAgentCardsCall(theme), context);
+			},
+			renderResult(result, _options, theme, context) {
+				return textComponent(formatA2AAgentCardsResult(result.details?.cards, theme), context);
 			},
 		}),
 		defineTool({
@@ -358,19 +417,6 @@ async function connectA2AClient(agentDir: string, agent: string) {
 	}
 	const transport = await connectRuntimeSocket(entry.socketPath);
 	return createIpcRuntimeClient(transport, createPlaceholderSnapshot(entry));
-}
-
-function toPublicCard(card: PiA2AAgentCard): Record<string, unknown> {
-	return {
-		name: card.name,
-		description: card.description,
-		version: card.version,
-		capabilities: card.capabilities,
-		defaultInputModes: card.defaultInputModes,
-		defaultOutputModes: card.defaultOutputModes,
-		cardPath: formatRelativeCardPath(card),
-		live: listRuntimeRegistryEntries(getAgentDir()).some((entry) => entry.agentId === card.name),
-	};
 }
 
 const TERMINAL_A2A_STATES = new Set<A2ATaskState>(["completed", "canceled", "failed", "rejected"]);
