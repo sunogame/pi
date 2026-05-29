@@ -2,9 +2,13 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import {
 	type AutocompleteItem,
 	CombinedAutocompleteProvider,
+	type Component,
 	Container,
 	Loader,
 	ProcessTerminal,
+	type SelectItem,
+	SelectList,
+	type SelectListLayoutOptions,
 	type SlashCommand,
 	Spacer,
 	setKeybindings,
@@ -33,10 +37,11 @@ import { connectRuntimeSocket } from "../core/runtime-socket-transport.ts";
 import { createStreamRuntimeTransport, type RuntimeTransport } from "../core/runtime-transport.ts";
 import { CountdownTimer } from "./interactive/components/countdown-timer.ts";
 import { CustomEditor } from "./interactive/components/custom-editor.ts";
+import { DynamicBorder } from "./interactive/components/dynamic-border.ts";
 import { RuntimeFooterComponent } from "./interactive/components/footer.ts";
 import { keyHint, keyText, rawKeyHint } from "./interactive/components/keybinding-hints.ts";
 import { RuntimeTranscriptView } from "./interactive/runtime-transcript-view.ts";
-import { getEditorTheme, initTheme, theme } from "./interactive/theme/theme.ts";
+import { getEditorTheme, getSelectListTheme, initTheme, theme } from "./interactive/theme/theme.ts";
 
 export function toRuntimeIpcArgs(args: readonly string[]): string[] {
 	const next = [...args];
@@ -156,6 +161,7 @@ class RuntimeAttachView {
 	private readonly transcript: RuntimeTranscriptView;
 	private readonly pendingMessages = new RuntimePendingMessagesView();
 	private readonly help = new Text("", 1, 0);
+	private readonly editorContainer = new Container();
 	private readonly editor: CustomEditor;
 	private readonly keybindings: KeybindingsManager;
 	private readonly footerDataProvider: FooterDataProvider;
@@ -232,7 +238,8 @@ class RuntimeAttachView {
 		this.root.addChild(this.transcript);
 		this.root.addChild(this.pendingMessages);
 		this.root.addChild(this.help);
-		this.root.addChild(this.editor);
+		this.editorContainer.addChild(this.editor);
+		this.root.addChild(this.editorContainer);
 		this.root.addChild(this.footer);
 		this.tui.addChild(this.root);
 		this.tui.setFocus(this.editor);
@@ -402,19 +409,7 @@ class RuntimeAttachView {
 	private async selectModel(modelReference: string): Promise<void> {
 		const snapshot = this.client.store.snapshot;
 		if (!modelReference) {
-			const current = formatModelReference(snapshot.agent.model);
-			const examples = snapshot.modelRegistry.available
-				.slice(0, 8)
-				.map((model) => formatModelReference(model))
-				.filter((model): model is string => Boolean(model));
-			const lines = [`current model: ${current ?? "none"}`, "usage: /model <provider>/<model>"];
-			if (examples.length > 0) {
-				lines.push(`available: ${examples.join("  ")}`);
-			}
-			if (snapshot.modelRegistry.error) {
-				lines.push(`models.json: ${snapshot.modelRegistry.error}`);
-			}
-			this.showStatusMessage(theme.fg("muted", lines.join("\n")));
+			this.showModelSelector();
 			return;
 		}
 
@@ -432,6 +427,45 @@ class RuntimeAttachView {
 		} catch (error) {
 			this.setError(error);
 		}
+	}
+
+	private showModelSelector(): void {
+		const snapshot = this.client.store.snapshot;
+		const models = snapshot.modelRegistry.available.filter((model) => formatModelReference(model));
+		if (models.length === 0) {
+			const lines = ["No models are available."];
+			if (snapshot.modelRegistry.error) {
+				lines.push(`models.json: ${snapshot.modelRegistry.error}`);
+			}
+			this.showStatusMessage(theme.fg("warning", lines.join("\n")));
+			return;
+		}
+
+		this.showSelector((done) => {
+			const selector = new RuntimeModelSelector(
+				snapshot,
+				async (modelReference) => {
+					done();
+					await this.selectModel(modelReference);
+				},
+				done,
+			);
+			return { component: selector, focus: selector.getSelectList() };
+		});
+	}
+
+	private showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
+		const done = () => {
+			this.editorContainer.clear();
+			this.editorContainer.addChild(this.editor);
+			this.tui.setFocus(this.editor);
+			this.tui.requestRender();
+		};
+		const { component, focus } = create(done);
+		this.editorContainer.clear();
+		this.editorContainer.addChild(component);
+		this.tui.setFocus(focus);
+		this.tui.requestRender();
 	}
 
 	private async clearRuntime(): Promise<void> {
@@ -885,6 +919,54 @@ class RuntimeAttachView {
 				finish(new Error(`Runtime IPC child exited (${signal ?? code ?? "unknown"})`));
 			}
 		});
+	}
+}
+
+const MODEL_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
+	minPrimaryColumnWidth: 28,
+	maxPrimaryColumnWidth: 72,
+};
+
+class RuntimeModelSelector extends Container {
+	private readonly selectList: SelectList;
+
+	constructor(snapshot: AgentRuntimeSnapshot, onSelect: (modelReference: string) => void, onCancel: () => void) {
+		super();
+		const currentReference = formatModelReference(snapshot.agent.model);
+		const items: SelectItem[] = snapshot.modelRegistry.available.flatMap((model) => {
+			const reference = formatModelReference(model);
+			if (!reference) {
+				return [];
+			}
+			const description = [model.provider, reference === currentReference ? "current" : undefined]
+				.filter((part): part is string => Boolean(part))
+				.join(" · ");
+			return [
+				{
+					value: reference,
+					label: model.modelId ?? reference,
+					description,
+				},
+			];
+		});
+
+		this.addChild(new DynamicBorder());
+		this.addChild(new Text(theme.fg("muted", "Select model"), 0, 0));
+		this.selectList = new SelectList(items, 12, getSelectListTheme(), MODEL_SELECT_LIST_LAYOUT);
+		const currentIndex = items.findIndex((item) => item.value === currentReference);
+		if (currentIndex >= 0) {
+			this.selectList.setSelectedIndex(currentIndex);
+		}
+		this.selectList.onSelect = (item) => {
+			onSelect(item.value);
+		};
+		this.selectList.onCancel = onCancel;
+		this.addChild(this.selectList);
+		this.addChild(new DynamicBorder());
+	}
+
+	getSelectList(): SelectList {
+		return this.selectList;
 	}
 }
 
