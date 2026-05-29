@@ -51,8 +51,11 @@ export function loadTeamAgentCard(spec: TeamRuntimeCardSpec, baseCwd = process.c
 	const cwd = resolve(baseCwd, spec.cwd ?? ".");
 	const cardPath = findAgentCardPath(cwd);
 	let frontmatter: AgentCardFrontmatter = {};
+	let cardBody = "";
 	if (cardPath) {
-		frontmatter = parseFrontmatter<AgentCardFrontmatter>(readFileSync(cardPath, "utf8")).frontmatter;
+		const parsed = parseFrontmatter<AgentCardFrontmatter>(readFileSync(cardPath, "utf8"));
+		frontmatter = parsed.frontmatter;
+		cardBody = parsed.body;
 	}
 
 	const declaredName = readString(frontmatter.name) ?? readString(frontmatter.id) ?? readString(frontmatter.role);
@@ -76,9 +79,10 @@ export function loadTeamAgentCard(spec: TeamRuntimeCardSpec, baseCwd = process.c
 		["text/plain"],
 	);
 
+	const bodyDescription = extractDescriptionFromMarkdown(readString(frontmatter.description), cardBody);
 	return {
 		name,
-		description: readString(frontmatter.description) ?? "",
+		description: bodyDescription,
 		version: readString(frontmatter.version) ?? "1.0.0",
 		capabilities: readCapabilities(frontmatter.capabilities),
 		defaultInputModes,
@@ -89,6 +93,18 @@ export function loadTeamAgentCard(spec: TeamRuntimeCardSpec, baseCwd = process.c
 	};
 }
 
+function extractDescriptionFromMarkdown(frontmatterDescription: string | undefined, body: string): string {
+	if (frontmatterDescription !== undefined) {
+		return frontmatterDescription;
+	}
+	const lines = body
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0 && !line.startsWith("#"));
+	const description = lines.join(" ").replace(/\s+/g, " ").trim();
+	return description.length > 400 ? `${description.slice(0, 399)}…` : description;
+}
+
 export function formatTeamAgentCardsForPrompt(cards: readonly PiA2AAgentCard[], selfName?: string): string {
 	if (cards.length === 0) {
 		return "";
@@ -97,18 +113,11 @@ export function formatTeamAgentCardsForPrompt(cards: readonly PiA2AAgentCard[], 
 
 	const lines = [
 		"<a2a_rules>",
-		"Peer agents are available through A2A-style tools.",
-		"Peer agents are opaque and do not share your private memory; include the necessary context when asking them to help.",
-		"Use Agent Cards to choose the right peer.",
-		"a2a_send_message creates a peer-owned A2A Task. Non-terminal tasks are watched automatically and later produce <a2a-task-notification> runtime notifications.",
-		"<receiving>",
-		"When you receive an <a2a-message>, answer it directly in the current turn. That assistant response completes the peer-owned Task.",
-		"</receiving>",
-		"<notifications>",
-		"An <a2a-task-notification> is a runtime notification, not a human message.",
-		"A notification message may contain multiple task notifications; handle each task id separately.",
-		"If a watcher reports timeout or error, use a2a_get_task once for the latest status, then decide whether to retry, summarize uncertainty, or ask the user.",
-		"</notifications>",
+		"Peer agents listed in <available_peer_agents> are teammates you can contact with A2A tools.",
+		"For user requests involving teammates, colleagues, or everyone, send a2a_send_message to each relevant peer.",
+		"Peer agents are separate runtimes; include the context they need.",
+		"When you receive an <a2a-message>, answer directly in the current turn.",
+		"Non-terminal A2A tasks are watched automatically; notifications are runtime events.",
 		"</a2a_rules>",
 		"",
 		"<available_peer_agents>",

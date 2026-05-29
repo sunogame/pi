@@ -156,24 +156,22 @@ function formatA2AListAgentCardsCall(theme: Theme): string {
 }
 
 function formatA2AAgentCardsForModel(cards: readonly PiA2AAgentCard[]): string {
-	if (cards.length === 0) {
-		return "No peer Agent Cards are configured.";
-	}
-	return [
-		"A2A Agent Cards:",
-		...cards.map((card) => {
-			const parts = [`- ${card.name}`];
-			const description = card.description.trim();
-			if (description) {
-				parts.push(`: ${description}`);
-			}
-			const modes = [
-				`input=${card.defaultInputModes.join(",")}`,
-				`output=${card.defaultOutputModes.join(",")}`,
-			].join(" ");
-			return `${parts.join("")}\n  ${modes}`;
-		}),
-	].join("\n");
+	return JSON.stringify(
+		{
+			agents: cards.map((card) => ({
+				name: card.name,
+				description: card.description,
+				version: card.version,
+				capabilities: card.capabilities,
+				defaultInputModes: card.defaultInputModes,
+				defaultOutputModes: card.defaultOutputModes,
+				cardPath: formatRelativeCardPath(card),
+				live: listRuntimeRegistryEntries(getAgentDir()).some((entry) => entry.agentId === card.name),
+			})),
+		},
+		null,
+		2,
+	);
 }
 
 function formatA2AAgentCardsResult(cards: readonly PiA2AAgentCard[] | undefined, theme: Theme): string {
@@ -191,12 +189,6 @@ function formatA2AAgentCardsResult(cards: readonly PiA2AAgentCard[] | undefined,
 		if (description) {
 			lines.push(theme.fg("toolOutput", `  ${description}`));
 		}
-		lines.push(
-			theme.fg(
-				"muted",
-				`  input ${card.defaultInputModes.join(", ")} · output ${card.defaultOutputModes.join(", ")}`,
-			),
-		);
 	}
 	return lines.join("\n");
 }
@@ -263,8 +255,7 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 		defineTool({
 			name: "a2a_list_agent_cards",
 			label: "A2A list agents",
-			description: "List A2A-style Agent Cards for peer agents in the pi runtime team.",
-			promptSnippet: "a2a_list_agent_cards: list peer Agent Cards for A2A routing.",
+			description: "Refresh the current A2A peer Agent Cards and live/offline status.",
 			parameters: listAgentCardsSchema,
 			async execute(): Promise<AgentToolResult<{ cards: PiA2AAgentCard[] }>> {
 				const cards = getCards();
@@ -284,11 +275,9 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 				"Send an A2A-style text message to a peer runtime. Returns an A2A Task owned by the target agent.",
 			promptSnippet: "a2a_send_message: send a message to a peer agent; returns an A2A Task.",
 			promptGuidelines: [
-				"Use a2a_send_message only when a peer Agent Card indicates it is a better fit for a focused question or task.",
-				"Do not use a2a_send_message to acknowledge or reply to an incoming <a2a-message>; answer directly in the current turn instead.",
-				"Include the necessary context in the message.",
-				"When a2a_send_message returns a non-terminal Task, pi automatically starts an A2A task watcher and will notify you when the task reaches a terminal state. Do not start a shell monitor for A2A tasks.",
-				"blocking=true is only an immediate-start optimization; queued tasks return without waiting to avoid deadlocks.",
+				"Use for focused questions or tasks to peers named in <available_peer_agents>.",
+				"Include the context the peer needs.",
+				"Answer incoming <a2a-message> requests directly; do not use this tool just to acknowledge them.",
 			],
 			parameters: sendMessageSchema,
 			executionMode: "sequential",
@@ -324,12 +313,10 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 		defineTool({
 			name: "a2a_get_task",
 			label: "A2A get task",
-			description: "Fetch an A2A Task from the peer agent runtime that owns it.",
-			promptSnippet: "a2a_get_task: fetch status and results for a peer-owned A2A Task.",
+			description: "Manually fetch an A2A Task from the peer agent runtime that owns it.",
+			promptSnippet: "a2a_get_task: manually fetch status and results for a peer-owned A2A Task.",
 			promptGuidelines: [
-				"Use a2a_get_task only for an immediate status refresh or when recovering a task by id.",
-				"If a2a_send_message already started an automatic watcher, prefer waiting for the a2a-task-notification instead of polling repeatedly.",
-				"If a watcher reports timeout or error, call a2a_get_task once for the latest status before deciding whether to retry or report uncertainty.",
+				"Use when the user asks for task status, you need to recover a known task id, or an automatic watcher reports an issue.",
 			],
 			parameters: getTaskSchema,
 			executionMode: "sequential",
@@ -352,10 +339,7 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 			label: "A2A cancel task",
 			description: "Request cancellation of an A2A Task owned by a peer agent runtime.",
 			promptSnippet: "a2a_cancel_task: cancel a peer-owned A2A Task when it is no longer needed.",
-			promptGuidelines: [
-				"Use a2a_cancel_task only when the remote task is no longer needed or should stop.",
-				"Do not use cancel to mark work done; completion is controlled by the peer runtime.",
-			],
+			promptGuidelines: ["Use only when the remote task is no longer needed or should stop."],
 			parameters: cancelTaskSchema,
 			executionMode: "sequential",
 			async execute(
