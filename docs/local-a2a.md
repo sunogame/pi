@@ -12,7 +12,6 @@ Each runtime may declare its local Agent Card in the frontmatter of its
 
 ```md
 ---
-name: backend
 description: Backend agent. Handles APIs, database schema, persistence bugs, and server integration questions.
 ---
 
@@ -20,8 +19,7 @@ description: Backend agent. Handles APIs, database schema, persistence bugs, and
 ...
 ```
 
-`name` is the routing key. In supervisor mode it should match the runtime id in
-`.pi/runtimes.json`:
+The routing key is the runtime `id` in `.pi/runtimes.json`:
 
 ```json
 {
@@ -33,15 +31,16 @@ description: Backend agent. Handles APIs, database schema, persistence bugs, and
 }
 ```
 
-If `name` is omitted, pi uses the runtime id. If `name` is present, it must
-match the runtime id; pi fails fast on mismatches so model-visible routing names
-cannot drift from registry ids. `description` is deliberately free-form; it
-should tell peers when this agent is the right target.
+pi always uses the runtime `id` as the model-visible Agent Card `name`.
+`AGENTS.md` frontmatter fields such as `name`, `id`, or `role` are ignored for
+local routing, so existing project files do not need to be renamed when a
+workspace assigns a runtime identity. `description` is deliberately free-form;
+it should tell peers when this agent is the right target.
 
 pi also parses these A2A-style fields when present, but the default prompt only
 discloses the fields the model needs for routing:
 
-- `name`
+- generated `name` from the runtime id
 - `description`
 - `defaultInputModes` or `inputModes` (defaults to `["text/plain"]`)
 - `defaultOutputModes` or `outputModes` (defaults to `["text/plain"]`)

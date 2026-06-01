@@ -58,11 +58,6 @@ export function loadTeamAgentCard(spec: TeamRuntimeCardSpec, baseCwd = process.c
 		cardBody = parsed.body;
 	}
 
-	const declaredName = readString(frontmatter.name) ?? readString(frontmatter.id) ?? readString(frontmatter.role);
-	if (declaredName && declaredName !== spec.id) {
-		const source = cardPath ?? cwd;
-		throw new Error(`A2A Agent Card name "${declaredName}" must match runtime id "${spec.id}" in ${source}`);
-	}
 	const name = spec.id;
 	const defaultInputModes = readStringArray(
 		frontmatter.defaultInputModes ??

@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import chalk from "chalk";
 import { APP_NAME, getAgentDir } from "./config.ts";
-import { loadTeamAgentCards } from "./core/a2a-agent-card.ts";
 import {
 	listRuntimeRegistryEntries,
 	readRuntimeRegistryEntry,
@@ -101,13 +100,11 @@ export function runtimeSpecToStartOptions(
 
 async function startSupervisor(configPath: string): Promise<void> {
 	const config = loadSupervisorConfig(configPath);
-	validateSupervisorAgentCardNames(config);
 	await startSupervisorRuntimes(config, configPath);
 }
 
 async function restartSupervisor(configPath: string): Promise<void> {
 	const config = loadSupervisorConfig(configPath);
-	validateSupervisorAgentCardNames(config);
 	for (const spec of config.runtimes) {
 		try {
 			await stopRuntime(getAgentDir(), spec.id);
@@ -135,20 +132,6 @@ async function startSupervisorRuntimes(config: SupervisorConfig, configPath: str
 	}
 	if (errors.length > 0) {
 		throw new Error(`Failed to start ${errors.length} runtime(s): ${errors.join("; ")}`);
-	}
-}
-
-export function validateSupervisorAgentCardNames(config: SupervisorConfig, baseCwd = process.cwd()): void {
-	const cards = loadTeamAgentCards(config.runtimes, baseCwd);
-	for (let i = 0; i < config.runtimes.length; i++) {
-		const spec = config.runtimes[i];
-		const card = cards[i];
-		if (!spec || !card || card.name === spec.id) {
-			continue;
-		}
-		throw new Error(
-			`Invalid Agent Card for runtime "${spec.id}": frontmatter name must match runtime id, got "${card.name}"`,
-		);
 	}
 }
 

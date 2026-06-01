@@ -241,7 +241,7 @@ ${chalk.bold("Options:")}
   --runtime-socket <path>        Unix socket path for runtime-ipc or attach-ipc
   --attach <id>                  Attach to a registered runtime by id
   --team-config <path>           Load local A2A peer Agent Cards from a supervisor config
-  --team-member-name <name>      Agent Card name for this runtime (defaults to runtime id)
+  --team-member-name <name>      Runtime team identity for local A2A (defaults to runtime id)
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume
