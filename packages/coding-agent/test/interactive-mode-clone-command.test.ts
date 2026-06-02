@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
 type CloneCommandContext = {
-	sessionManager: { getLeafId: () => string | null };
-	runtimeHost: {
+	runtimeSnapshot: {
+		session: { currentLeafId?: string | null };
+	};
+	runtimeClient: {
 		fork: (entryId: string, options?: { position?: "before" | "at" }) => Promise<{ cancelled: boolean }>;
 	};
 	renderCurrentSessionState: () => void;
@@ -29,8 +31,8 @@ describe("InteractiveMode /clone", () => {
 		const requestRender = vi.fn();
 
 		const context: CloneCommandContext = {
-			sessionManager: { getLeafId: () => "leaf-123" },
-			runtimeHost: { fork },
+			runtimeSnapshot: { session: { currentLeafId: "leaf-123" } },
+			runtimeClient: { fork },
 			renderCurrentSessionState,
 			editor: { setText },
 			showStatus,
@@ -54,8 +56,8 @@ describe("InteractiveMode /clone", () => {
 		const showError = vi.fn();
 
 		const context: CloneCommandContext = {
-			sessionManager: { getLeafId: () => null },
-			runtimeHost: { fork },
+			runtimeSnapshot: { session: { currentLeafId: null } },
+			runtimeClient: { fork },
 			renderCurrentSessionState: vi.fn(),
 			editor: { setText: vi.fn() },
 			showStatus,

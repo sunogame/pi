@@ -140,9 +140,13 @@ function readClipboardImageViaWlPaste(): ClipboardImage | null {
 	return { bytes: data.stdout, mimeType: baseMimeType(selectedType) };
 }
 
-function isWSL(env: NodeJS.ProcessEnv = process.env): boolean {
+function isWSL(env: NodeJS.ProcessEnv = process.env, options: { probeProcVersion?: boolean } = {}): boolean {
 	if (env.WSL_DISTRO_NAME || env.WSLENV) {
 		return true;
+	}
+
+	if (options.probeProcVersion === false) {
+		return false;
 	}
 
 	try {
@@ -265,7 +269,7 @@ export async function readClipboardImage(options?: {
 	let image: ClipboardImage | null = null;
 
 	if (platform === "linux") {
-		const wsl = isWSL(env);
+		const wsl = isWSL(env, { probeProcVersion: options?.env === undefined });
 		const wayland = isWaylandSession(env);
 
 		if (wayland || wsl) {

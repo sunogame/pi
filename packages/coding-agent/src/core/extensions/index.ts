@@ -69,6 +69,7 @@ export type {
 	ExtensionHandler,
 	ExtensionHeaderFactory,
 	ExtensionManifest,
+	ExtensionMode,
 	ExtensionPlacement,
 	// Runtime
 	ExtensionRuntime,

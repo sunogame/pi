@@ -2,7 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import { Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
-import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
+import type { AgentRuntimeEvent } from "../../../src/core/agent-runtime-snapshot.ts";
 import type { SessionContext } from "../../../src/core/session-manager.ts";
 import type { ToolExecutionComponent } from "../../../src/modes/interactive/components/tool-execution.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
@@ -31,6 +31,8 @@ type RenderSessionContextThis = {
 	pendingTools: Map<string, ToolExecutionComponent>;
 	chatContainer: Container;
 	footer: { invalidate(): void };
+	tuiExtensionRunner: { emitRuntimeEvent(): Promise<void> };
+	createTuiExtensionContext(): unknown;
 	ui: TUI;
 	settingsManager: {
 		getShowImages(): boolean;
@@ -38,9 +40,11 @@ type RenderSessionContextThis = {
 	};
 	sessionManager: { getCwd(): string };
 	session: { retryAttempt: number };
+	runtimeSnapshot: { run: { retryAttempt: number } };
 	toolOutputExpanded: boolean;
 	isInitialized: boolean;
 	updateEditorBorderColor(): void;
+	getRuntimeCwd(): string;
 	getRegisteredToolDefinition(toolName: string): undefined;
 	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void;
 };
@@ -51,7 +55,7 @@ type RenderSessionContext = (
 	options?: { updateFooter?: boolean; populateHistory?: boolean },
 ) => void;
 
-type HandleEvent = (this: RenderSessionContextThis, event: AgentSessionEvent) => Promise<void>;
+type HandleEvent = (this: RenderSessionContextThis, event: AgentRuntimeEvent) => Promise<void>;
 
 function createFakeInteractiveModeThis(): RenderSessionContextThis {
 	const chatContainer = new Container();
@@ -59,6 +63,8 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 		pendingTools: new Map<string, ToolExecutionComponent>(),
 		chatContainer,
 		footer: { invalidate: vi.fn() },
+		tuiExtensionRunner: { emitRuntimeEvent: vi.fn(async () => {}) },
+		createTuiExtensionContext: vi.fn(() => ({})),
 		ui: { requestRender: vi.fn() } as unknown as TUI,
 		settingsManager: {
 			getShowImages: () => false,
@@ -66,9 +72,11 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 		},
 		sessionManager: { getCwd: () => process.cwd() },
 		session: { retryAttempt: 0 },
+		runtimeSnapshot: { run: { retryAttempt: 0 } },
 		toolOutputExpanded: false,
 		isInitialized: true,
 		updateEditorBorderColor: vi.fn(),
+		getRuntimeCwd: () => process.cwd(),
 		getRegisteredToolDefinition: (_toolName: string) => undefined,
 		addMessageToChat(message: AgentMessage) {
 			chatContainer.addChild(new Text(message.role, 0, 0));
@@ -129,18 +137,24 @@ describe("InteractiveMode.renderSessionContext", () => {
 		const renderSessionContext = (
 			InteractiveMode.prototype as unknown as { renderSessionContext: RenderSessionContext }
 		).renderSessionContext;
-		const handleEvent = (InteractiveMode.prototype as unknown as { handleEvent: HandleEvent }).handleEvent;
+		const handleEvent = (InteractiveMode.prototype as unknown as { handleRuntimeEvent: HandleEvent })
+			.handleRuntimeEvent;
 
 		renderSessionContext.call(fakeThis, createSessionContext([createAssistantToolCallMessage()]));
 
 		expect(fakeThis.pendingTools.has(TOOL_CALL_ID)).toBe(true);
 
 		await handleEvent.call(fakeThis, {
-			type: "tool_execution_end",
-			toolCallId: TOOL_CALL_ID,
-			toolName: TOOL_NAME,
-			result: { content: [{ type: "text", text: "FINAL_RESULT" }], details: undefined },
-			isError: false,
+			id: 1,
+			type: "tool_end",
+			tool: {
+				toolCallId: TOOL_CALL_ID,
+				toolName: TOOL_NAME,
+				input: { delayMs: 10_000 },
+				result: { content: [{ type: "text", text: "FINAL_RESULT" }], details: undefined },
+				isError: false,
+				status: "completed",
+			},
 		});
 
 		expect(fakeThis.pendingTools.has(TOOL_CALL_ID)).toBe(false);

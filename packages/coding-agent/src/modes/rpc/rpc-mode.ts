@@ -317,6 +317,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		session = runtimeHost.session;
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
+			mode: "rpc",
 			commandContextActions: {
 				waitForIdle: () => session.agent.waitForIdle(),
 				newSession: async (options) => runtimeHost.newSession(options),
@@ -547,7 +548,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// =================================================================
 
 			case "bash": {
-				const result = await session.executeBash(command.command);
+				const result = await session.executeBash(command.command, undefined, {
+					excludeFromContext: command.excludeFromContext,
+				});
 				return success(id, "bash", result);
 			}
 

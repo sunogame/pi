@@ -29,6 +29,7 @@ import type {
 	ExtensionError,
 	ExtensionEvent,
 	ExtensionFlag,
+	ExtensionMode,
 	ExtensionRuntime,
 	ExtensionShortcut,
 	ExtensionUIContext,
@@ -392,6 +393,7 @@ export class ExtensionRunner {
 	private extensions: Extension[];
 	private runtime: ExtensionRuntime;
 	private uiContext: ExtensionUIContext;
+	private mode: ExtensionMode = "print";
 	private cwd: string;
 	private sessionManager: SessionManager;
 	private modelRegistry: ModelRegistry;
@@ -522,8 +524,9 @@ export class ExtensionRunner {
 		this.reloadHandler = async () => {};
 	}
 
-	setUIContext(uiContext?: ExtensionUIContext): void {
+	setUIContext(uiContext?: ExtensionUIContext, mode: ExtensionMode = "print"): void {
 		this.uiContext = uiContext ?? noOpUIContext;
+		this.mode = mode;
 	}
 
 	getUIContext(): ExtensionUIContext {
@@ -745,6 +748,10 @@ export class ExtensionRunner {
 			get ui() {
 				runner.assertActive();
 				return runner.uiContext;
+			},
+			get mode() {
+				runner.assertActive();
+				return runner.mode;
 			},
 			get hasUI() {
 				runner.assertActive();
@@ -1204,7 +1211,12 @@ export class ExtensionRunner {
 	}
 
 	/** Emit input event. Transforms chain, "handled" short-circuits. */
-	async emitInput(text: string, images: ImageContent[] | undefined, source: InputSource): Promise<InputEventResult> {
+	async emitInput(
+		text: string,
+		images: ImageContent[] | undefined,
+		source: InputSource,
+		streamingBehavior?: "steer" | "followUp",
+	): Promise<InputEventResult> {
 		const ctx = this.createContext();
 		let currentText = text;
 		let currentImages = images;
@@ -1212,7 +1224,13 @@ export class ExtensionRunner {
 		for (const ext of this.extensions) {
 			for (const handler of ext.handlers.get("input") ?? []) {
 				try {
-					const event: InputEvent = { type: "input", text: currentText, images: currentImages, source };
+					const event: InputEvent = {
+						type: "input",
+						text: currentText,
+						images: currentImages,
+						source,
+						streamingBehavior,
+					};
 					const result = (await handler(event, ctx)) as InputEventResult | undefined;
 					if (result?.action === "handled") return result;
 					if (result?.action === "transform") {
