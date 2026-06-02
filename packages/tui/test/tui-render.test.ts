@@ -225,6 +225,59 @@ describe("TUI resize handling", () => {
 	});
 });
 
+describe("TUI viewport redraw fallback", () => {
+	it("preserves scrollback when an off-screen line changes", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 20 }, (_, i) => `Line ${i}`);
+		tui.start();
+		await terminal.waitForRender();
+		terminal.clearWrites();
+
+		component.lines = ["Line 0 updated", ...Array.from({ length: 19 }, (_, i) => `Line ${i + 1}`)];
+		tui.requestRender();
+		await terminal.waitForRender();
+
+		const writes = terminal.getWrites();
+		assert.ok(!writes.includes("\x1b[2J"), "Off-screen changes should not clear the terminal viewport");
+		assert.ok(!writes.includes("\x1b[3J"), "Off-screen changes should not clear scrollback");
+		assert.ok(writes.includes("\x1b[2K"), "Off-screen changes should repaint visible rows");
+
+		const viewport = terminal.getViewport();
+		assert.ok(viewport.join("\n").includes("Line 19"), "Latest content remains visible after viewport redraw");
+
+		tui.stop();
+	});
+
+	it("redraws only the viewport when a large replacement grows beyond the screen", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 5 }, (_, i) => `Old ${i}`);
+		tui.start();
+		await terminal.waitForRender();
+		terminal.clearWrites();
+
+		component.lines = Array.from({ length: 20 }, (_, i) => `New ${i}`);
+		tui.requestRender();
+		await terminal.waitForRender();
+
+		const writes = terminal.getWrites();
+		assert.ok(!writes.includes("\x1b[2J"), "Large replacements should not clear the terminal viewport");
+		assert.ok(!writes.includes("\x1b[3J"), "Large replacements should not clear scrollback");
+		assert.ok(writes.includes("\x1b[2K"), "Large replacements should repaint visible rows");
+		assert.ok(writes.includes("New 19"), "Viewport redraw should include the latest visible content");
+		assert.ok(!writes.includes("New 0"), "Viewport redraw should not write the entire off-screen replacement");
+
+		tui.stop();
+	});
+});
+
 describe("TUI content shrinkage", () => {
 	it("clears empty rows when content shrinks significantly", async () => {
 		const terminal = new VirtualTerminal(40, 10);

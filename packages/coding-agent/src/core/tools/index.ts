@@ -45,8 +45,11 @@ export {
 export {
 	createMonitorTool,
 	createMonitorToolDefinition,
+	createStopMonitorTool,
+	createStopMonitorToolDefinition,
 	type MonitorToolDetails,
 	type MonitorToolInput,
+	type StopMonitorToolInput,
 } from "./monitor.ts";
 export {
 	createReadTool,
@@ -82,14 +85,29 @@ import { createEditTool, createEditToolDefinition, type EditToolOptions } from "
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
-import { createMonitorTool, createMonitorToolDefinition } from "./monitor.ts";
+import {
+	createMonitorTool,
+	createMonitorToolDefinition,
+	createStopMonitorTool,
+	createStopMonitorToolDefinition,
+} from "./monitor.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls" | "monitor";
-export const allToolNames: Set<ToolName> = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "monitor"]);
+export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls" | "monitor" | "stop_monitor";
+export const allToolNames: Set<ToolName> = new Set([
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"grep",
+	"find",
+	"ls",
+	"monitor",
+	"stop_monitor",
+]);
 
 export interface ToolsOptions {
 	read?: ReadToolOptions;
@@ -120,6 +138,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createLsToolDefinition(cwd, options?.ls);
 		case "monitor":
 			return createMonitorToolDefinition(options?.monitorManager);
+		case "stop_monitor":
+			return createStopMonitorToolDefinition(options?.monitorManager);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -143,6 +163,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createLsTool(cwd, options?.ls);
 		case "monitor":
 			return createMonitorTool(options?.monitorManager);
+		case "stop_monitor":
+			return createStopMonitorTool(options?.monitorManager);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -155,6 +177,7 @@ export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions)
 		createEditToolDefinition(cwd, options?.edit),
 		createWriteToolDefinition(cwd, options?.write),
 		createMonitorToolDefinition(options?.monitorManager),
+		createStopMonitorToolDefinition(options?.monitorManager),
 	];
 }
 
@@ -177,6 +200,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
 		monitor: createMonitorToolDefinition(options?.monitorManager),
+		stop_monitor: createStopMonitorToolDefinition(options?.monitorManager),
 	};
 }
 
@@ -187,6 +211,7 @@ export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
 		createEditTool(cwd, options?.edit),
 		createWriteTool(cwd, options?.write),
 		createMonitorTool(options?.monitorManager),
+		createStopMonitorTool(options?.monitorManager),
 	];
 }
 
@@ -209,5 +234,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),
 		monitor: createMonitorTool(options?.monitorManager),
+		stop_monitor: createStopMonitorTool(options?.monitorManager),
 	};
 }

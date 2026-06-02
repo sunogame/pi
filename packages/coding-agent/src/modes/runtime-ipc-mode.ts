@@ -1,5 +1,5 @@
 import { Writable } from "node:stream";
-import type { AgentRuntimeEvent } from "../core/agent-runtime-snapshot.ts";
+import { type AgentRuntimeEvent, statusFromSession } from "../core/agent-runtime-snapshot.ts";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import { takeOverStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
 import type { RuntimeIpcServer } from "../core/runtime-ipc-server.ts";
@@ -135,19 +135,20 @@ function createRegistryEntry(
 	socketPath: string,
 	createdAt: string,
 ): RuntimeRegistryEntry {
-	const snapshot = runtimeHost.getSnapshot();
+	const session = runtimeHost.session;
+	const sessionManager = session.sessionManager;
 	const now = new Date().toISOString();
 	return {
 		agentId: runtimeId,
 		socketPath,
 		pid: process.pid,
-		cwd: snapshot.agent.cwd,
-		sessionId: snapshot.session.sessionId,
-		sessionFile: snapshot.session.sessionFile,
-		sessionName: snapshot.session.sessionName,
-		status: snapshot.agent.status,
-		protocolVersion: snapshot.protocolVersion,
-		capabilities: [...snapshot.capabilities],
+		cwd: sessionManager.getCwd(),
+		sessionId: session.sessionId,
+		sessionFile: session.sessionFile,
+		sessionName: session.sessionName,
+		status: statusFromSession(session),
+		protocolVersion: 1,
+		capabilities: runtimeHost.getRuntimeCapabilities(),
 		createdAt,
 		updatedAt: now,
 	};

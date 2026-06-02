@@ -39,6 +39,9 @@ export async function handleSupervisorCommand(args: string[]): Promise<boolean> 
 			case "restart":
 				await restartSupervisor(parseConfigPath(args.slice(2)));
 				return true;
+			case "stop":
+				await stopSupervisor(parseConfigPath(args.slice(2)));
+				return true;
 			case "status":
 			case "list":
 				printSupervisorStatus(parseConfigPath(args.slice(2)));
@@ -118,9 +121,20 @@ async function startSupervisor(configPath: string): Promise<void> {
 async function restartSupervisor(configPath: string): Promise<void> {
 	const config = loadSupervisorConfig(configPath);
 	validateSupervisorConfigForStart(config, configPath);
+	await stopSupervisorRuntimes(config);
+	await startSupervisorRuntimes(config, configPath);
+}
+
+async function stopSupervisor(configPath: string): Promise<void> {
+	const config = loadSupervisorConfig(configPath);
+	await stopSupervisorRuntimes(config);
+}
+
+async function stopSupervisorRuntimes(config: SupervisorConfig): Promise<void> {
 	for (const spec of config.runtimes) {
 		try {
 			await stopRuntime(getAgentDir(), spec.id);
+			console.log(chalk.green(`Stopped runtime "${spec.id}".`));
 		} catch (error) {
 			console.log(
 				chalk.dim(
@@ -129,7 +143,6 @@ async function restartSupervisor(configPath: string): Promise<void> {
 			);
 		}
 	}
-	await startSupervisorRuntimes(config, configPath);
 }
 
 async function startSupervisorRuntimes(config: SupervisorConfig, configPath: string): Promise<void> {
@@ -240,6 +253,7 @@ function printSupervisorHelp(): void {
 
 ${chalk.bold("Usage:")}
   ${APP_NAME} supervisor start [--config .pi/runtimes.json]
+  ${APP_NAME} supervisor stop [--config .pi/runtimes.json]
   ${APP_NAME} supervisor restart [--config .pi/runtimes.json]
   ${APP_NAME} supervisor status [--config .pi/runtimes.json]
   ${APP_NAME} org start [--config .pi/runtimes.json]

@@ -123,6 +123,7 @@ describe("supervisor CLI", () => {
 		}
 
 		expect(logs.join("\n")).toContain("supervisor restart");
+		expect(logs.join("\n")).toContain("supervisor stop");
 	});
 
 	it("reports missing runtime cwd before supervisor start/restart", ({ task }) => {

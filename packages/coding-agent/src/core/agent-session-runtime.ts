@@ -136,6 +136,10 @@ export class AgentSessionRuntime {
 		return this.snapshotProjector.getSnapshot(options);
 	}
 
+	getRuntimeCapabilities(): AgentRuntimeCapability[] {
+		return this.snapshotProjector.getCapabilities();
+	}
+
 	subscribeRuntimeEvents(listener: AgentRuntimeEventListener): () => void {
 		return this.snapshotProjector.subscribe(listener);
 	}

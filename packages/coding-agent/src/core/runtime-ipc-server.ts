@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { xmlEscape } from "../utils/xml.ts";
 import { type AgentRuntimeSnapshot, getTranscriptPageBefore } from "./agent-runtime-snapshot.ts";
 import type { PromptOptions } from "./agent-session.ts";
@@ -58,6 +59,7 @@ export class RuntimeIpcServer {
 	}
 
 	private async handleLine(line: string): Promise<void> {
+		const startedAt = performance.now();
 		let message: unknown;
 		try {
 			message = JSON.parse(line) as unknown;
@@ -71,18 +73,21 @@ export class RuntimeIpcServer {
 		try {
 			const result = await this.dispatch(message);
 			await this.sendResponse({ id: message.id, ok: true, result } as RuntimeIpcResponse);
+			this.logSlowRequest(message.method, startedAt);
 		} catch (error) {
 			await this.sendResponse({
 				id: message.id,
 				ok: false,
 				error: toRuntimeIpcError(error),
 			});
+			this.logSlowRequest(message.method, startedAt);
 		}
 	}
 
 	private async dispatch(request: RuntimeIpcRequest): Promise<RuntimeIpcResult[RuntimeIpcMethod]> {
 		switch (request.method) {
 			case "attach": {
+				const startedAt = performance.now();
 				const params = readObjectParams(request.params);
 				const lastSeenEventId = typeof params.lastSeenEventId === "number" ? params.lastSeenEventId : undefined;
 				const maxTranscriptBytes =
@@ -99,6 +104,12 @@ export class RuntimeIpcServer {
 					},
 				});
 				this.unsubscribeRuntimeEvents = unsubscribe;
+				this.logSlowAttach(
+					startedAt,
+					result.snapshot.agent.agentId,
+					result.snapshot.transcript.entries.length,
+					result.snapshot.transcript.totalEntries,
+				);
 				return result;
 			}
 			case "detach":
@@ -307,14 +318,37 @@ export class RuntimeIpcServer {
 
 	private canStartA2ATaskImmediately(): boolean {
 		const state = this.getA2AState();
-		const snapshot = this.runtime.getSnapshot();
 		return (
 			state.activeTaskId === undefined &&
 			state.submittedTaskIds.size === 0 &&
-			snapshot.agent.status === "idle" &&
-			!snapshot.run.isStreaming &&
-			!snapshot.run.isBashRunning
+			!this.runtime.session.isStreaming &&
+			!this.runtime.session.isBashRunning &&
+			!this.runtime.session.isCompacting &&
+			!this.runtime.session.isRetrying
 		);
+	}
+
+	private logSlowAttach(
+		startedAt: number,
+		agentId: string,
+		loadedEntries: number,
+		totalEntries: number | undefined,
+	): void {
+		const elapsedMs = performance.now() - startedAt;
+		if (elapsedMs < 500 && process.env.PI_ATTACH_DEBUG !== "1") {
+			return;
+		}
+		process.stderr.write(
+			`[runtime-ipc] attach snapshot ${elapsedMs.toFixed(1)}ms loaded=${loadedEntries} total=${totalEntries ?? "?"} runtime=${agentId}\n`,
+		);
+	}
+
+	private logSlowRequest(method: RuntimeIpcMethod, startedAt: number): void {
+		const elapsedMs = performance.now() - startedAt;
+		if (method !== "attach" || (elapsedMs < 500 && process.env.PI_ATTACH_DEBUG !== "1")) {
+			return;
+		}
+		process.stderr.write(`[runtime-ipc] attach request ${elapsedMs.toFixed(1)}ms\n`);
 	}
 
 	private enqueueA2ATask(task: A2ATask, message: A2AMessage, from: string | undefined): Promise<void> {

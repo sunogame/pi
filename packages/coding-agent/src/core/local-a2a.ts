@@ -317,6 +317,7 @@ export function createLocalA2AToolDefinitions(options: LocalA2AToolsOptions): To
 			promptSnippet: "a2a_get_task: manually fetch status and results for a peer-owned A2A Task.",
 			promptGuidelines: [
 				"Use when the user asks for task status, you need to recover a known task id, or an automatic watcher reports an issue.",
+				"If the task is submitted or working, do not use shell sleep or polling loops; wait for the automatic a2a-task-notification or continue other work.",
 			],
 			parameters: getTaskSchema,
 			executionMode: "sequential",
@@ -427,6 +428,10 @@ function a2aTaskModelView(task: A2ATask, autoMonitor = false): Record<string, un
 			status: "started",
 			note: "You will receive an a2a-task-notification when this task reaches a terminal state.",
 		};
+	}
+	if (!isTerminalA2ATask(task)) {
+		view.next =
+			"Do not wait with shell sleep or polling loops. Wait for the automatic a2a-task-notification, continue other work, or ask the user if you need to pause.";
 	}
 	if (metadata.historyOmitted) {
 		view.historyOmitted = true;

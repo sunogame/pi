@@ -50,6 +50,7 @@ export interface MonitorManagerOptions {
 	onMonitorStarted?: (monitor: MonitorTaskSnapshot) => void;
 	onMonitorOutput?: (event: { monitorId: string; lineCount: number; preview: string }) => void;
 	onMonitorEnded?: (monitor: MonitorTaskSnapshot) => void;
+	onMonitorStopped?: (monitorId: string) => void;
 	defaults?: Partial<MonitorLimits>;
 }
 
@@ -100,6 +101,7 @@ export class MonitorManager {
 	private readonly onMonitorStarted?: (monitor: MonitorTaskSnapshot) => void;
 	private readonly onMonitorOutput?: (event: { monitorId: string; lineCount: number; preview: string }) => void;
 	private readonly onMonitorEnded?: (monitor: MonitorTaskSnapshot) => void;
+	private readonly onMonitorStopped?: (monitorId: string) => void;
 	private readonly limits: MonitorLimits;
 	private readonly monitors = new Map<string, MonitorTaskInternal>();
 	private readonly recent: MonitorTaskSnapshot[] = [];
@@ -112,6 +114,7 @@ export class MonitorManager {
 		this.onMonitorStarted = options.onMonitorStarted;
 		this.onMonitorOutput = options.onMonitorOutput;
 		this.onMonitorEnded = options.onMonitorEnded;
+		this.onMonitorStopped = options.onMonitorStopped;
 		this.limits = { ...DEFAULT_LIMITS, ...options.defaults };
 	}
 
@@ -190,6 +193,7 @@ export class MonitorManager {
 			return undefined;
 		}
 		task.forceStatus = "stopped";
+		this.onMonitorStopped?.(id);
 		if (task.child.pid) {
 			killProcessTree(task.child.pid);
 		}

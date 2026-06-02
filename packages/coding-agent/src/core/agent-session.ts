@@ -360,6 +360,7 @@ export class AgentSession {
 			onMonitorStarted: (monitor) => this._emit({ type: "monitor_started", monitor }),
 			onMonitorOutput: (event) => this._emit({ type: "monitor_output", ...event }),
 			onMonitorEnded: (monitor) => this._emit({ type: "monitor_ended", monitor }),
+			onMonitorStopped: (monitorId) => this._clearRuntimeNotificationsForMonitor(monitorId),
 		});
 
 		// Always subscribe to agent events for internal handling
@@ -1004,6 +1005,12 @@ export class AgentSession {
 		this._runtimeNotifications.push(notification);
 		this._emit({ type: "notification_queued", notification });
 		this._scheduleRuntimeNotificationDrain();
+	}
+
+	private _clearRuntimeNotificationsForMonitor(monitorId: string): void {
+		this._runtimeNotifications = this._runtimeNotifications.filter(
+			(notification) => notification.source.monitorId !== monitorId,
+		);
 	}
 
 	private _scheduleRuntimeNotificationDrain(): void {
@@ -2595,7 +2602,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write", "monitor"];
+			: ["read", "bash", "edit", "write", "monitor", "stop_monitor"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,

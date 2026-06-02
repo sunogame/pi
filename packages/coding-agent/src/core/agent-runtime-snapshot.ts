@@ -296,7 +296,7 @@ function pendingUserMessages(session: AgentSession): PendingUserMessageSnapshot[
 	];
 }
 
-function statusFromSession(session: AgentSession): AgentRuntimeStatus {
+export function statusFromSession(session: AgentSession): AgentRuntimeStatus {
 	if (session.isCompacting) {
 		return "compacting";
 	}
@@ -559,6 +559,10 @@ export class AgentRuntimeSnapshotProjector {
 
 	getEventsAfter(eventId: number): AgentRuntimeEvent[] {
 		return this.eventLog.filter((event) => event.id > eventId);
+	}
+
+	getCapabilities(): AgentRuntimeCapability[] {
+		return [...this.capabilities];
 	}
 
 	emitExtensionEvent(namespace: string, payload: unknown): void {

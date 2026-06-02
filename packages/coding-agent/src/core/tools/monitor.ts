@@ -25,7 +25,14 @@ const monitorSchema = Type.Object({
 	),
 });
 
+const stopMonitorSchema = Type.Object({
+	monitorId: Type.String({
+		description: "ID of the running monitor to stop, for example m_abc123.",
+	}),
+});
+
 export type MonitorToolInput = Static<typeof monitorSchema>;
+export type StopMonitorToolInput = Static<typeof stopMonitorSchema>;
 export type MonitorToolDetails = MonitorTaskSnapshot;
 
 function formatMonitorCall(args: Partial<MonitorToolInput> | undefined, theme: Theme): string {
@@ -125,4 +132,70 @@ export function createMonitorToolDefinition(
 
 export function createMonitorTool(monitorManager?: MonitorManager): AgentTool<typeof monitorSchema> {
 	return wrapToolDefinition(createMonitorToolDefinition(monitorManager));
+}
+
+export function createStopMonitorToolDefinition(
+	monitorManager?: MonitorManager,
+): ToolDefinition<typeof stopMonitorSchema, MonitorToolDetails | { monitorId: string; stopped: false }> {
+	return {
+		name: "stop_monitor",
+		label: "stop_monitor",
+		description: "Stop a running background monitor by monitor id.",
+		promptSnippet: "Stop a running monitor when its notifications are no longer useful or have become too noisy.",
+		promptGuidelines: [
+			"Use stop_monitor when you know the monitor id and want to stop future monitor notifications.",
+			"Use the monitor-id shown in monitor-notification messages or monitor tool results.",
+		],
+		parameters: stopMonitorSchema,
+		async execute(_toolCallId, params: StopMonitorToolInput, signal?: AbortSignal) {
+			if (!monitorManager) {
+				throw new Error("Monitor stop tool is unavailable in this context");
+			}
+			if (signal?.aborted) {
+				throw new Error("Monitor stop aborted");
+			}
+			const monitor = monitorManager.stop(params.monitorId);
+			if (!monitor) {
+				return {
+					content: [{ type: "text", text: `No active monitor ${params.monitorId}` }],
+					details: { monitorId: params.monitorId, stopped: false },
+					isError: true,
+				};
+			}
+			const stoppedMonitor: MonitorTaskSnapshot = { ...monitor, status: "stopped" };
+			return {
+				content: [{ type: "text", text: `Stopped monitor ${monitor.id}` }],
+				details: stoppedMonitor,
+			};
+		},
+		renderCall(args, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const id = args?.monitorId?.trim();
+			text.setText(`${theme.fg("toolTitle", theme.bold("stop_monitor"))} ${id ? theme.fg("accent", id) : "..."}`);
+			return text;
+		},
+		renderResult(result, _options, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			if (isMonitorStopMiss(result.details)) {
+				text.setText(theme.fg("warning", `No active monitor ${result.details.monitorId}`));
+			} else {
+				text.setText(formatMonitorResult(result.details as MonitorTaskSnapshot | undefined, theme));
+			}
+			return text;
+		},
+	};
+}
+
+export function createStopMonitorTool(monitorManager?: MonitorManager): AgentTool<typeof stopMonitorSchema> {
+	return wrapToolDefinition(createStopMonitorToolDefinition(monitorManager));
+}
+
+function isMonitorStopMiss(details: unknown): details is { monitorId: string; stopped: false } {
+	return (
+		typeof details === "object" &&
+		details !== null &&
+		"stopped" in details &&
+		(details as { stopped?: unknown }).stopped === false &&
+		typeof (details as { monitorId?: unknown }).monitorId === "string"
+	);
 }

@@ -1,4 +1,8 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
 import {
 	type AutocompleteItem,
 	CombinedAutocompleteProvider,
@@ -82,10 +86,50 @@ export const ATTACH_LOCAL_COMMANDS: SlashCommand[] = [
 	{ name: "abort", description: "Abort the current runtime run" },
 	{ name: "quit", description: "Detach this TUI" },
 ];
-const ATTACH_TRANSCRIPT_BYTE_LIMIT = 200_000;
-const ATTACH_TRANSCRIPT_ENTRY_LIMIT = 300;
-const TRANSCRIPT_PAGE_BYTE_LIMIT = 200_000;
-const TRANSCRIPT_PAGE_ENTRY_LIMIT = 150;
+const ATTACH_TRANSCRIPT_BYTE_LIMIT = readPositiveIntegerEnv("PI_ATTACH_TRANSCRIPT_BYTES", 80_000);
+const ATTACH_TRANSCRIPT_ENTRY_LIMIT = readPositiveIntegerEnv("PI_ATTACH_TRANSCRIPT_ENTRIES", 120);
+const TRANSCRIPT_PAGE_BYTE_LIMIT = readPositiveIntegerEnv("PI_ATTACH_PAGE_BYTES", 200_000);
+const TRANSCRIPT_PAGE_ENTRY_LIMIT = readPositiveIntegerEnv("PI_ATTACH_PAGE_ENTRIES", 150);
+
+const ATTACH_DEBUG = process.env.PI_ATTACH_DEBUG === "1";
+
+function writeAttachDebug(message: string): void {
+	if (!ATTACH_DEBUG) {
+		return;
+	}
+	const logPath = path.join(os.homedir(), ".pi", "agent", "attach-debug.log");
+	fs.mkdirSync(path.dirname(logPath), { recursive: true });
+	fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${message}\n`);
+}
+
+function elapsedMs(start: number): string {
+	return `${(performance.now() - start).toFixed(1)}ms`;
+}
+
+function snapshotDebugSummary(snapshot: AgentRuntimeSnapshot): string {
+	const transcript = snapshot.transcript;
+	return [
+		`agent=${snapshot.agent.agentId}`,
+		`status=${snapshot.agent.status}`,
+		`entries=${transcript.entries.length}`,
+		`total=${transcript.totalEntries ?? transcript.entries.length}`,
+		`omitted=${transcript.omittedEntries ?? 0}`,
+		`streaming=${snapshot.run.streamingMessage ? "yes" : "no"}`,
+		`tools=${snapshot.run.activeToolExecutions.length}`,
+	].join(" ");
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+	const raw = process.env[name];
+	if (!raw) {
+		return fallback;
+	}
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value <= 0) {
+		return fallback;
+	}
+	return Math.floor(value);
+}
 
 export async function runRuntimeAttachMode(
 	args: readonly string[] = process.argv.slice(2),
@@ -289,15 +333,35 @@ class RuntimeAttachView {
 			this.tui.start();
 			this.renderSnapshot(this.client.store.snapshot);
 
-			this.client
+			const attachClient = this.client;
+			const attachStart = performance.now();
+			writeAttachDebug(`initial attach start ${snapshotDebugSummary(attachClient.store.snapshot)}`);
+			attachClient
 				.attach({
 					maxTranscriptBytes: ATTACH_TRANSCRIPT_BYTE_LIMIT,
 					maxTranscriptEntries: ATTACH_TRANSCRIPT_ENTRY_LIMIT,
 				})
 				.then(() => {
+					if (this.stopped || this.client !== attachClient) {
+						writeAttachDebug(`initial attach ignored stale result elapsed=${elapsedMs(attachStart)}`);
+						return;
+					}
+					writeAttachDebug(
+						`initial attach ipc+store ${elapsedMs(attachStart)} ${snapshotDebugSummary(this.client.store.snapshot)}`,
+					);
+					const renderStart = performance.now();
 					this.renderSnapshot(this.client.store.snapshot);
+					writeAttachDebug(
+						`initial attach render ${elapsedMs(renderStart)} ${snapshotDebugSummary(this.client.store.snapshot)}`,
+					);
 				})
 				.catch((error: unknown) => {
+					if (this.stopped || this.client !== attachClient) {
+						writeAttachDebug(
+							`initial attach ignored stale error elapsed=${elapsedMs(attachStart)} error=${error instanceof Error ? error.message : String(error)}`,
+						);
+						return;
+					}
 					finish(error instanceof Error ? error : new Error(String(error)));
 				});
 		});
@@ -578,18 +642,28 @@ class RuntimeAttachView {
 			this.showStatusMessage(theme.fg("warning", "Runtime registry is unavailable in this attach session."));
 			return;
 		}
+		const switchStart = performance.now();
+		const previousRuntimeId = this.client.store.snapshot.agent.agentId;
+		writeAttachDebug(`switch start from=${previousRuntimeId} to=${runtimeId}`);
 		const entry = readRuntimeRegistryEntry(this.agentDir, runtimeId);
 		if (!entry) {
 			this.showStatusMessage(theme.fg("warning", formatRuntimeNotFound(this.agentDir, runtimeId)));
+			writeAttachDebug(`switch missing-runtime to=${runtimeId} elapsed=${elapsedMs(switchStart)}`);
 			return;
 		}
 		try {
+			const connectStart = performance.now();
 			const transport = await connectRuntimeSocket(entry.socketPath);
+			writeAttachDebug(`switch connect to=${runtimeId} elapsed=${elapsedMs(connectStart)}`);
 			const nextClient = createIpcRuntimeClient(transport, createPlaceholderSnapshot(entry.cwd));
+			const attachStart = performance.now();
 			await nextClient.attach({
 				maxTranscriptBytes: ATTACH_TRANSCRIPT_BYTE_LIMIT,
 				maxTranscriptEntries: ATTACH_TRANSCRIPT_ENTRY_LIMIT,
 			});
+			writeAttachDebug(
+				`switch attach to=${runtimeId} elapsed=${elapsedMs(attachStart)} ${snapshotDebugSummary(nextClient.store.snapshot)}`,
+			);
 			this.unsubscribeStore?.();
 			this.unsubscribeStore = undefined;
 			this.client.close();
@@ -603,8 +677,16 @@ class RuntimeAttachView {
 			this.subscribeClient();
 			this.setupAutocompleteProvider(this.client.store.snapshot);
 			this.transcript.updateOptions({ cwd: this.client.store.snapshot.agent.cwd });
+			const renderStart = performance.now();
 			this.renderSnapshot(this.client.store.snapshot);
+			writeAttachDebug(
+				`switch render to=${runtimeId} elapsed=${elapsedMs(renderStart)} ${snapshotDebugSummary(this.client.store.snapshot)}`,
+			);
+			writeAttachDebug(`switch done from=${previousRuntimeId} to=${runtimeId} total=${elapsedMs(switchStart)}`);
 		} catch (error) {
+			writeAttachDebug(
+				`switch error to=${runtimeId} elapsed=${elapsedMs(switchStart)} error=${error instanceof Error ? error.message : String(error)}`,
+			);
 			this.setError(error);
 		}
 	}
@@ -698,10 +780,16 @@ class RuntimeAttachView {
 	}
 
 	private renderSnapshot(snapshot: AgentRuntimeSnapshot, options: { populateHistory?: boolean } = {}): void {
+		const renderStart = performance.now();
 		this.header.renderSnapshot(snapshot);
 		this.renderStatus(snapshot);
+		const transcriptStart = performance.now();
 		this.transcript.renderSnapshot(snapshot, { populateHistory: options.populateHistory ?? true });
+		const transcriptElapsed = elapsedMs(transcriptStart);
 		this.pendingMessages.renderSnapshot(snapshot);
+		writeAttachDebug(
+			`renderSnapshot total=${elapsedMs(renderStart)} transcript=${transcriptElapsed} populateHistory=${options.populateHistory ?? true} ${snapshotDebugSummary(snapshot)}`,
+		);
 	}
 
 	private renderStatus(snapshot: AgentRuntimeSnapshot): void {

@@ -55,6 +55,7 @@ describe("regression #5109: exclude tools", () => {
 				"dynamic_tool",
 				"edit",
 				"monitor",
+				"stop_monitor",
 				"write",
 			]);
 			expect(harness.session.systemPrompt).not.toContain("- read:");
