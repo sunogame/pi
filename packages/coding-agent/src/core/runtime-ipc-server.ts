@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { xmlEscape } from "../utils/xml.ts";
-import type { AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
+import { type AgentRuntimeSnapshot, getTranscriptPageBefore } from "./agent-runtime-snapshot.ts";
 import type { PromptOptions } from "./agent-session.ts";
 import type { AgentSessionRuntime } from "./agent-session-runtime.ts";
 import { serializeJsonLine } from "./jsonl.ts";
@@ -85,9 +85,15 @@ export class RuntimeIpcServer {
 			case "attach": {
 				const params = readObjectParams(request.params);
 				const lastSeenEventId = typeof params.lastSeenEventId === "number" ? params.lastSeenEventId : undefined;
+				const maxTranscriptBytes =
+					typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : undefined;
+				const maxTranscriptEntries =
+					typeof params.maxTranscriptEntries === "number" ? params.maxTranscriptEntries : undefined;
 				this.unsubscribeRuntimeEvents?.();
 				const { unsubscribe, ...result } = this.runtime.attachRuntime({
 					lastSeenEventId,
+					maxTranscriptBytes,
+					maxTranscriptEntries,
 					listener: (event) => {
 						void this.sendNotification({ type: "runtime_event", event });
 					},
@@ -159,8 +165,30 @@ export class RuntimeIpcServer {
 				}
 				return { stopped: this.runtime.session.stopMonitor(params.id) !== undefined };
 			}
-			case "getSnapshot":
-				return { snapshot: this.runtime.getSnapshot() };
+			case "getSnapshot": {
+				const params =
+					request.params === undefined ? undefined : (readObjectParams(request.params) as Record<string, unknown>);
+				const maxTranscriptBytes =
+					typeof params?.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : undefined;
+				const maxTranscriptEntries =
+					typeof params?.maxTranscriptEntries === "number" ? params.maxTranscriptEntries : undefined;
+				return { snapshot: this.runtime.getSnapshot({ maxTranscriptBytes, maxTranscriptEntries }) };
+			}
+			case "transcript/getBefore": {
+				const params = readObjectParams(request.params);
+				const beforeEntryId = typeof params.beforeEntryId === "string" ? params.beforeEntryId : undefined;
+				const maxEntries = typeof params.maxEntries === "number" ? params.maxEntries : undefined;
+				const maxBytes = typeof params.maxBytes === "number" ? params.maxBytes : undefined;
+				try {
+					return getTranscriptPageBefore(this.runtime.session.sessionManager.getEntries(), {
+						beforeEntryId,
+						maxBytes,
+						maxEntries,
+					});
+				} catch (error) {
+					throw invalidParams(error instanceof Error ? error.message : String(error));
+				}
+			}
 			case "shutdown":
 				setTimeout(() => this.onShutdown?.(), 0);
 				return {};

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentRuntimeEvent } from "../src/core/agent-runtime-snapshot.ts";
+import { getTranscriptPageBefore } from "../src/core/agent-runtime-snapshot.ts";
 import {
 	type CreateAgentSessionRuntimeFactory,
 	createAgentSessionFromServices,
@@ -13,6 +14,7 @@ import {
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ExtensionFactory, ExtensionUIContext, RuntimeExtensionAPI } from "../src/core/extensions/index.ts";
 import { createInProcessRuntimeClient } from "../src/core/runtime-client.ts";
+import type { SessionEntry } from "../src/core/session-manager.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 
 describe("Agent runtime snapshot", () => {
@@ -22,6 +24,23 @@ describe("Agent runtime snapshot", () => {
 		while (cleanups.length > 0) {
 			await cleanups.pop()?.();
 		}
+	});
+
+	it("pages transcript entries before a loaded window without splitting entries", () => {
+		const entries = Array.from({ length: 5 }, (_, index) => testMessageEntry(index));
+
+		const page = getTranscriptPageBefore(entries, {
+			beforeEntryId: "entry-4",
+			maxEntries: 2,
+			maxBytes: 10,
+		});
+
+		expect(page.entries.map((entry) => entry.id)).toEqual(["entry-3"]);
+		expect(page.totalEntries).toBe(5);
+		expect(page.omittedEntriesBefore).toBe(3);
+		expect(page.hasMoreBefore).toBe(true);
+		expect(page.oldestLoadedEntryId).toBe("entry-3");
+		expect(page.newestLoadedEntryId).toBe("entry-3");
 	});
 
 	async function createRuntimeHost(options: { extensionFactories?: ExtensionFactory[] } = {}) {
@@ -84,6 +103,20 @@ describe("Agent runtime snapshot", () => {
 		});
 
 		return { runtimeHost, tempDir };
+	}
+
+	function testMessageEntry(index: number): SessionEntry {
+		return {
+			id: `entry-${index}`,
+			message: {
+				content: `message-${index}`,
+				role: "user",
+				timestamp: index,
+			},
+			parentId: index === 0 ? null : `entry-${index - 1}`,
+			timestamp: new Date(index).toISOString(),
+			type: "message",
+		};
 	}
 
 	it("returns a semantic snapshot for the current session", async () => {

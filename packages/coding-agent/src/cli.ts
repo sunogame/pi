@@ -17,4 +17,8 @@ process.emitWarning = (() => {}) as typeof process.emitWarning;
 // Runtime settings are applied once SettingsManager has loaded global/project settings.
 configureHttpDispatcher();
 
-main(process.argv.slice(2));
+void main(process.argv.slice(2)).catch((error) => {
+	const message = error instanceof Error ? error.message : String(error);
+	console.error(`Error: ${message}`);
+	process.exitCode = 1;
+});

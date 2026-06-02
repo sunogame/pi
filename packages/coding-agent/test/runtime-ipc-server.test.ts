@@ -5,6 +5,7 @@ import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
 import { createIpcRuntimeClient } from "../src/core/ipc-runtime-client.ts";
 import { createRuntimeIpcServer } from "../src/core/runtime-ipc-server.ts";
 import type { RuntimeTransport } from "../src/core/runtime-transport.ts";
+import type { SessionEntry } from "../src/core/session-manager.ts";
 
 class MemoryRuntimeTransport implements RuntimeTransport {
 	peer?: MemoryRuntimeTransport;
@@ -89,6 +90,23 @@ describe("RuntimeIpcServer", () => {
 		await tick();
 
 		expect(client.store.snapshot.session.sessionName).toBe("resynced");
+	});
+
+	it("loads older transcript pages over IPC", async () => {
+		const entries = Array.from({ length: 5 }, (_, index) => testMessageEntry(index));
+		const { clientTransport, serverTransport } = createTransportPair();
+		const runtime = createFakeRuntime(snapshot(1, "idle", { entries: entries.slice(3) }));
+		runtime.allEntries = entries;
+		createRuntimeIpcServer(runtime.host, serverTransport);
+		const client = createIpcRuntimeClient(clientTransport, snapshot(0, "idle"));
+
+		const page = await client.loadTranscriptBefore({
+			beforeEntryId: "entry-3",
+			maxEntries: 2,
+		});
+
+		expect(page.entries.map((entry) => entry.id)).toEqual(["entry-1", "entry-2"]);
+		expect(client.store.snapshot.transcript.entries.map((entry) => entry.id)).toEqual(["entry-1", "entry-2"]);
 	});
 
 	it("detaches runtime listeners when the transport closes", async () => {
@@ -481,9 +499,11 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 	abort: ReturnType<typeof vi.fn>;
 	emitA2ATaskChanged: ReturnType<typeof vi.fn>;
 	currentSnapshot: AgentRuntimeSnapshot;
+	allEntries: SessionEntry[];
 	listener?: (event: AgentRuntimeEvent) => void;
 } {
 	const fake = {
+		allEntries: initialSnapshot.transcript.entries,
 		currentSnapshot: initialSnapshot,
 		listener: undefined as ((event: AgentRuntimeEvent) => void) | undefined,
 		attachRuntime: vi.fn((options?: { lastSeenEventId?: number; listener?: (event: AgentRuntimeEvent) => void }) => {
@@ -521,6 +541,9 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 				stopMonitor: fake.stopMonitor,
 				agent: { waitForIdle: vi.fn(async () => {}) },
 				executeExtensionCommand: fake.executeExtensionCommand,
+				sessionManager: {
+					getEntries: () => fake.allEntries,
+				},
 			},
 		} as unknown as AgentSessionRuntime,
 		attachRuntime: fake.attachRuntime,
@@ -538,9 +561,29 @@ function createFakeRuntime(initialSnapshot: AgentRuntimeSnapshot): {
 		set currentSnapshot(snapshot: AgentRuntimeSnapshot) {
 			fake.currentSnapshot = snapshot;
 		},
+		get allEntries() {
+			return fake.allEntries;
+		},
+		set allEntries(entries: SessionEntry[]) {
+			fake.allEntries = entries;
+		},
 		get listener() {
 			return fake.listener;
 		},
+	};
+}
+
+function testMessageEntry(index: number): SessionEntry {
+	return {
+		id: `entry-${index}`,
+		message: {
+			content: `message-${index}`,
+			role: "user",
+			timestamp: index,
+		},
+		parentId: index === 0 ? null : `entry-${index - 1}`,
+		timestamp: new Date(index).toISOString(),
+		type: "message",
 	};
 }
 

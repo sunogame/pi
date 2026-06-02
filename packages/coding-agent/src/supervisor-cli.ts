@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import chalk from "chalk";
 import { APP_NAME, getAgentDir } from "./config.ts";
@@ -60,9 +60,20 @@ export function loadSupervisorConfig(configPath = defaultSupervisorConfigPath())
 	if (!existsSync(configPath)) {
 		throw new Error(`Supervisor config not found: ${configPath}`);
 	}
-	const parsed = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Invalid supervisor config JSON: ${configPath}\n  ${message}`);
+	}
 	if (!isSupervisorConfig(parsed)) {
-		throw new Error(`Invalid supervisor config: ${configPath}`);
+		throw new Error(
+			[
+				`Invalid supervisor config shape: ${configPath}`,
+				'Expected: { "runtimes": [{ "id": "backend", "cwd": "./backend" }] }',
+			].join("\n"),
+		);
 	}
 	return parsed;
 }
@@ -100,11 +111,13 @@ export function runtimeSpecToStartOptions(
 
 async function startSupervisor(configPath: string): Promise<void> {
 	const config = loadSupervisorConfig(configPath);
+	validateSupervisorConfigForStart(config, configPath);
 	await startSupervisorRuntimes(config, configPath);
 }
 
 async function restartSupervisor(configPath: string): Promise<void> {
 	const config = loadSupervisorConfig(configPath);
+	validateSupervisorConfigForStart(config, configPath);
 	for (const spec of config.runtimes) {
 		try {
 			await stopRuntime(getAgentDir(), spec.id);
@@ -135,6 +148,61 @@ async function startSupervisorRuntimes(config: SupervisorConfig, configPath: str
 	}
 }
 
+export function validateSupervisorConfigForStart(config: SupervisorConfig, configPath: string): void {
+	const errors: string[] = [];
+	const seenIds = new Map<string, number>();
+	const seenCwds = new Map<string, string>();
+
+	config.runtimes.forEach((spec, index) => {
+		const label = spec.id?.trim() ? `runtime "${spec.id}"` : `runtime at index ${index}`;
+		const id = spec.id.trim();
+		if (!id) {
+			errors.push(`${label}: id must not be empty`);
+		} else {
+			const previousIndex = seenIds.get(id);
+			if (previousIndex !== undefined) {
+				errors.push(`${label}: duplicate id "${id}" also used at index ${previousIndex}`);
+			}
+			seenIds.set(id, index);
+		}
+
+		const cwd = resolve(spec.cwd ?? process.cwd());
+		if (!existsSync(cwd)) {
+			errors.push(`${label}: cwd does not exist: ${cwd}`);
+			return;
+		}
+		let isDirectory = false;
+		try {
+			isDirectory = statSync(cwd).isDirectory();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			errors.push(`${label}: cannot access cwd ${cwd}: ${message}`);
+			return;
+		}
+		if (!isDirectory) {
+			errors.push(`${label}: cwd is not a directory: ${cwd}`);
+			return;
+		}
+
+		const previousId = seenCwds.get(cwd);
+		if (previousId) {
+			errors.push(`${label}: cwd duplicates runtime "${previousId}": ${cwd}`);
+		}
+		seenCwds.set(cwd, id || label);
+	});
+
+	if (errors.length > 0) {
+		throw new Error(
+			[
+				`Invalid supervisor config: ${configPath}`,
+				...errors.map((error) => `  - ${error}`),
+				"",
+				"Fix .pi/runtimes.json, then run supervisor start/restart again.",
+			].join("\n"),
+		);
+	}
+}
+
 function printSupervisorStatus(configPath: string): void {
 	const config = loadSupervisorConfig(configPath);
 	const entries = listRuntimeRegistryEntries(getAgentDir());
@@ -153,7 +221,10 @@ function printSupervisorStatus(configPath: string): void {
 
 function parseConfigPath(args: string[]): string {
 	for (let i = 0; i < args.length; i++) {
-		if (args[i] === "--config" && i + 1 < args.length) {
+		if (args[i] === "--config") {
+			if (i + 1 >= args.length || args[i + 1]?.startsWith("-")) {
+				throw new Error("Missing value for --config. Usage: pi supervisor start --config <path>");
+			}
 			return resolve(args[i + 1]);
 		}
 	}

@@ -24,4 +24,11 @@ describe("runtime CLI", () => {
 	it("requires a runtime id", () => {
 		expect(() => parseRuntimeStartArgs(["--cwd", "."])).toThrow(/Missing runtime id/);
 	});
+
+	it("reports missing runtime start flag values", () => {
+		expect(() => parseRuntimeStartArgs(["backend", "--cwd"])).toThrow(/Missing value for --cwd/);
+		expect(() => parseRuntimeStartArgs(["backend", "--runtime-socket"])).toThrow(
+			/Missing value for --runtime-socket/,
+		);
+	});
 });

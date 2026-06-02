@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import { Container, type TUI } from "@earendil-works/pi-tui";
+import { Container, Text, type TUI } from "@earendil-works/pi-tui";
 import type { AgentRuntimeSnapshot } from "../../core/agent-runtime-snapshot.ts";
 import { parseSkillBlock } from "../../core/agent-session.ts";
 import type { ToolDefinition } from "../../core/extensions/types.ts";
@@ -72,6 +72,16 @@ export class RuntimeTranscriptView extends Container {
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.cwd = snapshot.agent.cwd;
+
+		if ((snapshot.transcript.omittedEntries ?? 0) > 0) {
+			const shown = snapshot.transcript.entries.length;
+			const total = snapshot.transcript.totalEntries ?? shown + (snapshot.transcript.omittedEntries ?? 0);
+			this.addChild(
+				new Text(
+					`Showing recent ${shown} of ${total} transcript entries. Older history is still in the runtime session.`,
+				),
+			);
+		}
 
 		const context = buildSessionContext(snapshot.transcript.entries, snapshot.transcript.currentLeafId);
 		this.renderSessionContext(context, {

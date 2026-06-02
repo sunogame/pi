@@ -2,7 +2,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { writeRuntimeStateEntry } from "../src/core/runtime-registry.ts";
-import { handleSupervisorCommand, runtimeSpecToStartOptions } from "../src/supervisor-cli.ts";
+import {
+	handleSupervisorCommand,
+	runtimeSpecToStartOptions,
+	validateSupervisorConfigForStart,
+} from "../src/supervisor-cli.ts";
 
 describe("supervisor CLI", () => {
 	it("converts runtime specs to runtime start options", ({ task }) => {
@@ -119,5 +123,37 @@ describe("supervisor CLI", () => {
 		}
 
 		expect(logs.join("\n")).toContain("supervisor restart");
+	});
+
+	it("reports missing runtime cwd before supervisor start/restart", ({ task }) => {
+		const root = join("/tmp", `pi-supervisor-bad-cwd-${task.id}`);
+		const configPath = join(root, ".pi", "runtimes.json");
+
+		expect(() =>
+			validateSupervisorConfigForStart(
+				{
+					runtimes: [{ id: "chat-server", cwd: join(root, "missing-chat-server") }],
+				},
+				configPath,
+			),
+		).toThrow(/chat-server.*cwd does not exist/);
+	});
+
+	it("reports duplicate runtime cwd values", ({ task }) => {
+		const root = join("/tmp", `pi-supervisor-duplicate-cwd-${task.id}`);
+		const backend = join(root, "backend");
+		mkdirSync(backend, { recursive: true });
+
+		expect(() =>
+			validateSupervisorConfigForStart(
+				{
+					runtimes: [
+						{ id: "backend", cwd: backend },
+						{ id: "backend-copy", cwd: backend },
+					],
+				},
+				join(root, ".pi", "runtimes.json"),
+			),
+		).toThrow(/cwd duplicates runtime "backend"/);
 	});
 });

@@ -1,4 +1,10 @@
-import type { AgentRuntimeAttachResult, AgentRuntimeEvent, AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
+import type {
+	AgentRuntimeAttachResult,
+	AgentRuntimeEvent,
+	AgentRuntimeSnapshot,
+	TranscriptPageBeforeParams,
+	TranscriptPageBeforeResult,
+} from "./agent-runtime-snapshot.ts";
 import type { PromptOptions } from "./agent-session.ts";
 import { serializeJsonLine } from "./jsonl.ts";
 import type { A2AMessageSendParams, A2ATask, A2ATaskIdParams, A2ATaskQueryParams } from "./local-a2a.ts";
@@ -33,6 +39,8 @@ export class IpcRuntimeClient implements RuntimeClient {
 	private requestId = 0;
 	private liveListener?: (event: AgentRuntimeEvent) => void;
 	private attachInbox: AgentRuntimeEvent[] | undefined;
+	private maxTranscriptBytes: number | undefined;
+	private maxTranscriptEntries: number | undefined;
 	private closed = false;
 
 	constructor(transport: RuntimeTransport, initialSnapshot: AgentRuntimeSnapshot) {
@@ -45,8 +53,14 @@ export class IpcRuntimeClient implements RuntimeClient {
 	async attach(options: RuntimeClientAttachOptions = {}): Promise<AgentRuntimeAttachResult> {
 		this.liveListener = options.listener;
 		this.attachInbox = [];
+		this.maxTranscriptBytes = options.maxTranscriptBytes;
+		this.maxTranscriptEntries = options.maxTranscriptEntries;
 		const lastSeenEventId = options.lastSeenEventId ?? this.store.lastAppliedEventId;
-		const result = await this.request("attach", { lastSeenEventId });
+		const result = await this.request("attach", {
+			lastSeenEventId,
+			maxTranscriptBytes: options.maxTranscriptBytes,
+			maxTranscriptEntries: options.maxTranscriptEntries,
+		});
 		const inbox = this.attachInbox;
 
 		const replayRequiresSnapshot = result.initialEvents.some(
@@ -127,6 +141,12 @@ export class IpcRuntimeClient implements RuntimeClient {
 		return result.stopped;
 	}
 
+	async loadTranscriptBefore(options: TranscriptPageBeforeParams = {}): Promise<TranscriptPageBeforeResult> {
+		const page = await this.request("transcript/getBefore", options);
+		this.store.prependTranscriptPage(page);
+		return page;
+	}
+
 	async shutdown(): Promise<void> {
 		await this.request("shutdown", undefined);
 	}
@@ -161,7 +181,14 @@ export class IpcRuntimeClient implements RuntimeClient {
 	}
 
 	private async refreshFromRuntime(): Promise<void> {
-		const result = await this.request("getSnapshot", undefined);
+		const params =
+			this.maxTranscriptBytes === undefined && this.maxTranscriptEntries === undefined
+				? undefined
+				: {
+						maxTranscriptBytes: this.maxTranscriptBytes,
+						maxTranscriptEntries: this.maxTranscriptEntries,
+					};
+		const result = await this.request("getSnapshot", params);
 		this.store.replaceFrom(result.snapshot);
 	}
 

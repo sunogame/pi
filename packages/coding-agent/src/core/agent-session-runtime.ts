@@ -132,8 +132,8 @@ export class AgentSessionRuntime {
 		return this._modelFallbackMessage;
 	}
 
-	getSnapshot(): AgentRuntimeSnapshot {
-		return this.snapshotProjector.getSnapshot();
+	getSnapshot(options?: { maxTranscriptBytes?: number; maxTranscriptEntries?: number }): AgentRuntimeSnapshot {
+		return this.snapshotProjector.getSnapshot(options);
 	}
 
 	subscribeRuntimeEvents(listener: AgentRuntimeEventListener): () => void {

@@ -273,6 +273,7 @@ Common attach-mode commands:
 /attach <runtime-id>
 /runtimes
 /broadcast <message>
+/load-more
 /model
 /new
 /new-all

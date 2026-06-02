@@ -31,7 +31,8 @@ pi --mode attach-ipc --attach backend
 /runtimes          显示已注册 runtime
 /attach backend    attach 到指定 runtime
 /broadcast ...     给所有已注册 runtime 发送同一个 prompt
-/exit              detach 当前 TUI
+/load-more         加载更早的 transcript entries
+/quit              detach 当前 TUI
 ```
 
 停止 runtime：
@@ -176,6 +177,7 @@ attach TUI 会从 registry 渲染一个简洁的 runtime strip。当前 runtime 
 /runtimes
 /attach <id>
 /broadcast <message>
+/load-more
 ```
 
 快捷键：

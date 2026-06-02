@@ -102,17 +102,24 @@ These methods are the Phase 3 IPC-safe `RuntimeClient` surface:
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `attach` | `{ lastSeenEventId?: number }` | `AgentRuntimeAttachResult` without function fields |
+| `attach` | `{ lastSeenEventId?: number; maxTranscriptEntries?: number; maxTranscriptBytes?: number }` | `AgentRuntimeAttachResult` without function fields |
 | `detach` | none | `{}` |
 | `prompt` | `{ text: string; options?: PromptOptions }` | `{}` |
 | `abort` | none | `{}` |
 | `waitForIdle` | none | `{}` |
 | `executeCommand` | `{ name: string; args: string }` | `{ handled: boolean }` |
-| `getSnapshot` | none | `{ snapshot: AgentRuntimeSnapshot }` |
+| `getSnapshot` | `{ maxTranscriptEntries?: number; maxTranscriptBytes?: number }` or none | `{ snapshot: AgentRuntimeSnapshot }` |
+| `transcript/getBefore` | `{ beforeEntryId?: string; maxEntries?: number; maxBytes?: number }` | `{ entries; totalEntries; omittedEntriesBefore; hasMoreBefore }` |
 | `shutdown` | none | `{}` |
 
 The IPC `attach` response cannot include an `unsubscribe` function. The client
 detaches by sending `detach` or closing the transport.
+
+`maxTranscriptEntries` and `maxTranscriptBytes` are display limits for remote
+clients. They trim older transcript entries from the returned snapshot only;
+the runtime session file and model context remain complete.
+Use `transcript/getBefore` to page older transcript entries into the client
+view when the snapshot was trimmed.
 
 `getSnapshot` is primarily an internal resynchronization primitive. Clients use
 it after events such as `transcript_changed`, where the event identifies that a

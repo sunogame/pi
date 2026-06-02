@@ -33,14 +33,19 @@ describe("runtime attach mode", () => {
 				"attach",
 				"runtimes",
 				"broadcast",
-				"clear",
-				"clear-all",
+				"new",
+				"new-all",
+				"model",
 				"compact",
+				"reload",
+				"load-more",
+				"more",
 				"abort",
-				"exit",
 				"quit",
 			]),
 		);
+		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).not.toContain("clear");
+		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).not.toContain("exit");
 		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).not.toContain("switch");
 		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).not.toContain("next");
 		expect(ATTACH_LOCAL_COMMANDS.map((command) => command.name)).not.toContain("prev");

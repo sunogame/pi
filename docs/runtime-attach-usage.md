@@ -33,7 +33,8 @@ Inside the attach TUI:
 /runtimes          show registered runtimes
 /attach backend    attach a specific runtime
 /broadcast ...     send one prompt to all registered runtimes
-/exit              detach this TUI
+/load-more         load older transcript entries
+/quit              detach this TUI
 ```
 
 Stop the runtime:
@@ -187,6 +188,7 @@ Commands:
 /runtimes
 /attach <id>
 /broadcast <message>
+/load-more
 ```
 
 Shortcuts:

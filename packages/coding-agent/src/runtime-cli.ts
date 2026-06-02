@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import chalk from "chalk";
 import { APP_NAME, getAgentDir } from "./config.ts";
@@ -158,9 +158,13 @@ export async function startRuntime(options: RuntimeStartOptions): Promise<Runtim
 		console.log(`Runtime "${options.agentId}" is already running pid=${existing.pid} socket=${existing.socketPath}`);
 		return existing;
 	}
+	validateRuntimeStartOptions(options);
 	const entrypoint = process.argv[1];
 	if (!entrypoint) {
 		throw new Error("Cannot start runtime: missing CLI entrypoint");
+	}
+	if (!existsSync(entrypoint)) {
+		throw new Error(`Cannot start runtime "${options.agentId}": CLI entrypoint does not exist: ${entrypoint}`);
 	}
 	const args = [
 		...options.runtimeArgs,
@@ -198,9 +202,17 @@ export function parseRuntimeStartArgs(args: string[]): RuntimeStartOptions {
 	let socketPath: string | undefined;
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i];
-		if (arg === "--cwd" && i + 1 < args.length) {
+		if (arg === "--cwd") {
+			if (i + 1 >= args.length || args[i + 1]?.startsWith("-")) {
+				throw new Error(`Missing value for --cwd. Usage: pi runtime start ${agentId} --cwd <dir>`);
+			}
 			cwd = resolve(args[++i]);
-		} else if (arg === "--runtime-socket" && i + 1 < args.length) {
+		} else if (arg === "--runtime-socket") {
+			if (i + 1 >= args.length || args[i + 1]?.startsWith("-")) {
+				throw new Error(
+					`Missing value for --runtime-socket. Usage: pi runtime start ${agentId} --runtime-socket <path>`,
+				);
+			}
 			socketPath = args[++i];
 		} else if (arg === "--") {
 			runtimeArgs.push(...args.slice(i + 1));
@@ -212,6 +224,25 @@ export function parseRuntimeStartArgs(args: string[]): RuntimeStartOptions {
 	return { agentId, cwd, socketPath, runtimeArgs };
 }
 
+function validateRuntimeStartOptions(options: RuntimeStartOptions): void {
+	if (!options.agentId.trim()) {
+		throw new Error("Cannot start runtime: runtime id is empty");
+	}
+	if (!existsSync(options.cwd)) {
+		throw new Error(`Cannot start runtime "${options.agentId}": cwd does not exist: ${options.cwd}`);
+	}
+	let stat: ReturnType<typeof statSync>;
+	try {
+		stat = statSync(options.cwd);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Cannot start runtime "${options.agentId}": cannot access cwd ${options.cwd}: ${message}`);
+	}
+	if (!stat.isDirectory()) {
+		throw new Error(`Cannot start runtime "${options.agentId}": cwd is not a directory: ${options.cwd}`);
+	}
+}
+
 async function waitForRuntimeEntryOrExit(
 	agentDir: string,
 	agentId: string,
@@ -219,6 +250,10 @@ async function waitForRuntimeEntryOrExit(
 	child: ReturnType<typeof spawn>,
 ): Promise<RuntimeRegistryEntry | undefined> {
 	let exited: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+	let spawnError: Error | undefined;
+	child.once("error", (error) => {
+		spawnError = error;
+	});
 	child.once("exit", (code, signal) => {
 		exited = { code, signal };
 	});
@@ -229,6 +264,11 @@ async function waitForRuntimeEntryOrExit(
 		if (entry) {
 			return entry;
 		}
+		if (spawnError) {
+			throw new Error(
+				`Runtime "${agentId}" could not be spawned: ${formatSpawnError(spawnError)}. See ${getRuntimeLogPath(agentDir, agentId)}`,
+			);
+		}
 		if (exited) {
 			throw new Error(
 				`Runtime "${agentId}" exited before registering (code=${exited.code ?? "null"} signal=${exited.signal ?? "null"}). See ${getRuntimeLogPath(agentDir, agentId)}`,
@@ -237,6 +277,17 @@ async function waitForRuntimeEntryOrExit(
 		await delay(100);
 	}
 	return undefined;
+}
+
+function formatSpawnError(error: Error): string {
+	const code = "code" in error ? String((error as NodeJS.ErrnoException).code) : undefined;
+	if (code === "ENOENT") {
+		return `${error.message}. Check that the runtime cwd and Node executable exist`;
+	}
+	if (code === "EACCES") {
+		return `${error.message}. Check executable permissions`;
+	}
+	return error.message;
 }
 
 async function waitForRuntimeExit(agentDir: string, agentId: string, timeoutMs: number): Promise<void> {

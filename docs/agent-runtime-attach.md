@@ -147,6 +147,8 @@ interface AgentRuntimeSnapshot {
   transcript: {
     entries: SessionEntry[];
     currentLeafId: string | null;
+    totalEntries?: number;
+    omittedEntries?: number;
   };
   run: {
     runId?: string;

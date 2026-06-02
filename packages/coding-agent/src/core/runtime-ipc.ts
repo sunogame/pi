@@ -1,4 +1,10 @@
-import type { AgentRuntimeAttachResult, AgentRuntimeEvent, AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
+import type {
+	AgentRuntimeAttachResult,
+	AgentRuntimeEvent,
+	AgentRuntimeSnapshot,
+	TranscriptPageBeforeParams,
+	TranscriptPageBeforeResult,
+} from "./agent-runtime-snapshot.ts";
 import type { PromptOptions } from "./agent-session.ts";
 import type { A2AMessageSendParams, A2ATask, A2ATaskIdParams, A2ATaskQueryParams } from "./local-a2a.ts";
 
@@ -15,6 +21,7 @@ export type RuntimeIpcMethod =
 	| "reload"
 	| "stopMonitor"
 	| "getSnapshot"
+	| "transcript/getBefore"
 	| "shutdown"
 	| "a2a/message/send"
 	| "a2a/tasks/get"
@@ -23,7 +30,7 @@ export type RuntimeIpcMethod =
 export type RuntimeIpcAttachResult = Omit<AgentRuntimeAttachResult, "unsubscribe">;
 
 export type RuntimeIpcRequestParams = {
-	attach: { lastSeenEventId?: number };
+	attach: { lastSeenEventId?: number; maxTranscriptBytes?: number; maxTranscriptEntries?: number };
 	detach: undefined;
 	prompt: { text: string; options?: PromptOptions };
 	abort: undefined;
@@ -34,7 +41,8 @@ export type RuntimeIpcRequestParams = {
 	compact: { customInstructions?: string };
 	reload: undefined;
 	stopMonitor: { id: string };
-	getSnapshot: undefined;
+	getSnapshot: { maxTranscriptBytes?: number; maxTranscriptEntries?: number } | undefined;
+	"transcript/getBefore": TranscriptPageBeforeParams;
 	shutdown: undefined;
 	"a2a/message/send": A2AMessageSendParams;
 	"a2a/tasks/get": A2ATaskQueryParams;
@@ -54,6 +62,7 @@ export type RuntimeIpcResult = {
 	reload: Record<string, never>;
 	stopMonitor: { stopped: boolean };
 	getSnapshot: { snapshot: AgentRuntimeSnapshot };
+	"transcript/getBefore": TranscriptPageBeforeResult;
 	shutdown: Record<string, never>;
 	"a2a/message/send": { task: A2ATask };
 	"a2a/tasks/get": { task: A2ATask };

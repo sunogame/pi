@@ -1,6 +1,13 @@
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Model, Transport } from "@earendil-works/pi-ai";
-import type { AgentRuntimeAttachResult, AgentRuntimeEvent, AgentRuntimeSnapshot } from "./agent-runtime-snapshot.ts";
+import type {
+	AgentRuntimeAttachResult,
+	AgentRuntimeEvent,
+	AgentRuntimeSnapshot,
+	TranscriptPageBeforeParams,
+	TranscriptPageBeforeResult,
+} from "./agent-runtime-snapshot.ts";
+import { getTranscriptPageBefore } from "./agent-runtime-snapshot.ts";
 import type { AgentSession, ExtensionBindings, ModelCycleResult, PromptOptions } from "./agent-session.ts";
 import type { AgentSessionRuntime } from "./agent-session-runtime.ts";
 import type { ToolDefinition } from "./extensions/index.ts";
@@ -31,6 +38,8 @@ export type RuntimeForkableUserMessage = ReturnType<AgentSession["getUserMessage
 
 export interface RuntimeClientAttachOptions {
 	lastSeenEventId?: number;
+	maxTranscriptBytes?: number;
+	maxTranscriptEntries?: number;
 	listener?: (event: AgentRuntimeEvent) => void;
 }
 
@@ -46,6 +55,7 @@ export interface RuntimeClient {
 	compact(customInstructions?: string): Promise<RuntimeCompactionResult>;
 	reload(): Promise<void>;
 	stopMonitor(id: string): Promise<boolean>;
+	loadTranscriptBefore(options?: TranscriptPageBeforeParams): Promise<TranscriptPageBeforeResult>;
 }
 
 /**
@@ -125,6 +135,41 @@ export class AgentRuntimeStore {
 		this.notify();
 	}
 
+	prependTranscriptPage(page: TranscriptPageBeforeResult): void {
+		if (page.entries.length === 0) {
+			this._snapshot = {
+				...this._snapshot,
+				transcript: {
+					...this._snapshot.transcript,
+					hasMoreBefore: page.hasMoreBefore,
+					omittedEntries: page.omittedEntriesBefore,
+					totalEntries: page.totalEntries,
+				},
+			};
+			this.notify();
+			return;
+		}
+		const existingIds = new Set(this._snapshot.transcript.entries.map((entry) => entry.id));
+		const entriesToPrepend = page.entries.filter((entry) => !existingIds.has(entry.id));
+		const entries = [...entriesToPrepend, ...this._snapshot.transcript.entries];
+		this._snapshot = {
+			...this._snapshot,
+			transcript: {
+				...this._snapshot.transcript,
+				entries,
+				hasMoreBefore: page.hasMoreBefore,
+				newestLoadedEntryId:
+					this._snapshot.transcript.newestLoadedEntryId ??
+					entries[entries.length - 1]?.id ??
+					page.newestLoadedEntryId,
+				oldestLoadedEntryId: entries[0]?.id,
+				omittedEntries: page.omittedEntriesBefore,
+				totalEntries: page.totalEntries,
+			},
+		};
+		this.notify();
+	}
+
 	apply(event: AgentRuntimeEvent): boolean {
 		if (event.id <= this._lastAppliedEventId) {
 			return false;
@@ -175,6 +220,8 @@ export class InProcessRuntimeClient implements LocalRuntimeClient {
 		const lastSeenEventId = options.lastSeenEventId ?? this.store.lastAppliedEventId;
 		const result = this.runtime.attachRuntime({
 			lastSeenEventId,
+			maxTranscriptBytes: options.maxTranscriptBytes,
+			maxTranscriptEntries: options.maxTranscriptEntries,
 			listener: (event) => {
 				if (attached) {
 					applyLiveEvent(event);
@@ -354,6 +401,12 @@ export class InProcessRuntimeClient implements LocalRuntimeClient {
 		const stopped = this.runtime.session.stopMonitor(id) !== undefined;
 		this.refreshFromRuntime();
 		return stopped;
+	}
+
+	async loadTranscriptBefore(options: TranscriptPageBeforeParams = {}): Promise<TranscriptPageBeforeResult> {
+		const page = getTranscriptPageBefore(this.runtime.session.sessionManager.getEntries(), options);
+		this.store.prependTranscriptPage(page);
+		return page;
 	}
 
 	async abortCompaction(): Promise<void> {

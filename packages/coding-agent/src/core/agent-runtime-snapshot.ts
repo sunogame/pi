@@ -54,6 +54,26 @@ export interface SessionSnapshot {
 export interface TranscriptSnapshot {
 	entries: SessionEntry[];
 	currentLeafId: string | null;
+	totalEntries?: number;
+	omittedEntries?: number;
+	oldestLoadedEntryId?: string;
+	newestLoadedEntryId?: string;
+	hasMoreBefore?: boolean;
+}
+
+export interface TranscriptPageBeforeParams {
+	beforeEntryId?: string;
+	maxEntries?: number;
+	maxBytes?: number;
+}
+
+export interface TranscriptPageBeforeResult {
+	entries: SessionEntry[];
+	totalEntries: number;
+	omittedEntriesBefore: number;
+	hasMoreBefore: boolean;
+	oldestLoadedEntryId?: string;
+	newestLoadedEntryId?: string;
 }
 
 export interface PendingUserMessageSnapshot {
@@ -230,6 +250,8 @@ export type AgentRuntimeEvent =
 export type AgentRuntimeEventListener = (event: AgentRuntimeEvent) => void;
 export interface AgentRuntimeAttachOptions {
 	lastSeenEventId?: number;
+	maxTranscriptEntries?: number;
+	maxTranscriptBytes?: number;
 	listener?: AgentRuntimeEventListener;
 }
 
@@ -298,6 +320,88 @@ function sessionSnapshot(session: AgentSession): SessionSnapshot {
 		currentLeafId: session.sessionManager.getLeafId(),
 		createdAt: header?.timestamp,
 	};
+}
+
+interface TranscriptLimitOptions {
+	maxEntries?: number;
+	maxBytes?: number;
+}
+
+function transcriptSnapshot(
+	entries: SessionEntry[],
+	currentLeafId: string | null,
+	options: TranscriptLimitOptions,
+): TranscriptSnapshot {
+	const start = findTranscriptWindowStart(entries, options);
+	const sliced = start > 0 ? entries.slice(start) : entries;
+	return {
+		entries: sliced,
+		currentLeafId,
+		totalEntries: entries.length,
+		omittedEntries: start,
+		oldestLoadedEntryId: sliced[0]?.id,
+		newestLoadedEntryId: sliced[sliced.length - 1]?.id,
+		hasMoreBefore: start > 0,
+	};
+}
+
+export function getTranscriptPageBefore(
+	entries: SessionEntry[],
+	params: TranscriptPageBeforeParams = {},
+): TranscriptPageBeforeResult {
+	const beforeIndex =
+		params.beforeEntryId === undefined
+			? entries.length
+			: entries.findIndex((entry) => entry.id === params.beforeEntryId);
+	if (beforeIndex < 0) {
+		throw new Error(`Transcript entry not found: ${params.beforeEntryId}`);
+	}
+	const candidates = entries.slice(0, beforeIndex);
+	const start = findTranscriptWindowStart(candidates, {
+		maxBytes: params.maxBytes,
+		maxEntries: params.maxEntries,
+	});
+	const page = candidates.slice(start);
+	return {
+		entries: page,
+		totalEntries: entries.length,
+		omittedEntriesBefore: start,
+		hasMoreBefore: start > 0,
+		oldestLoadedEntryId: page[0]?.id,
+		newestLoadedEntryId: page[page.length - 1]?.id,
+	};
+}
+
+function findTranscriptWindowStart(entries: SessionEntry[], options: TranscriptLimitOptions): number {
+	const maxEntries =
+		typeof options.maxEntries === "number" && Number.isFinite(options.maxEntries) && options.maxEntries > 0
+			? Math.floor(options.maxEntries)
+			: undefined;
+	const maxBytes =
+		typeof options.maxBytes === "number" && Number.isFinite(options.maxBytes) && options.maxBytes > 0
+			? Math.floor(options.maxBytes)
+			: undefined;
+	if ((!maxEntries || entries.length <= maxEntries) && !maxBytes) {
+		return 0;
+	}
+	let start = maxEntries ? Math.max(0, entries.length - maxEntries) : 0;
+	if (maxBytes) {
+		let totalBytes = 0;
+		let byteStart = entries.length;
+		for (let index = entries.length - 1; index >= 0; index--) {
+			const entryBytes = Buffer.byteLength(JSON.stringify(entries[index]), "utf8");
+			if (byteStart < entries.length && totalBytes + entryBytes > maxBytes) {
+				break;
+			}
+			totalBytes += entryBytes;
+			byteStart = index;
+			if (maxEntries && entries.length - byteStart >= maxEntries) {
+				break;
+			}
+		}
+		start = Math.max(start, byteStart);
+	}
+	return start;
 }
 
 function resourcesSnapshot(session: AgentSession): RuntimeResourceSnapshot {
@@ -437,7 +541,10 @@ export class AgentRuntimeSnapshotProjector {
 
 	attach(options: AgentRuntimeAttachOptions = {}): AgentRuntimeAttachResult {
 		const unsubscribe = options.listener ? this.subscribe(options.listener) : () => {};
-		const snapshot = this.getSnapshot();
+		const snapshot = this.getSnapshot({
+			maxTranscriptBytes: options.maxTranscriptBytes,
+			maxTranscriptEntries: options.maxTranscriptEntries,
+		});
 		const initialEvents =
 			options.lastSeenEventId === undefined
 				? []
@@ -469,8 +576,12 @@ export class AgentRuntimeSnapshotProjector {
 		return eventId >= this.eventLog[0].id - 1;
 	}
 
-	getSnapshot(): AgentRuntimeSnapshot {
+	getSnapshot(options: { maxTranscriptBytes?: number; maxTranscriptEntries?: number } = {}): AgentRuntimeSnapshot {
 		const session = this.session;
+		const transcript = transcriptSnapshot(session.sessionManager.getEntries(), session.sessionManager.getLeafId(), {
+			maxBytes: options.maxTranscriptBytes,
+			maxEntries: options.maxTranscriptEntries,
+		});
 		return {
 			protocolVersion: 1,
 			capabilities: this.capabilities,
@@ -484,10 +595,7 @@ export class AgentRuntimeSnapshotProjector {
 				status: this.status,
 			},
 			session: sessionSnapshot(session),
-			transcript: {
-				entries: session.sessionManager.getEntries(),
-				currentLeafId: session.sessionManager.getLeafId(),
-			},
+			transcript,
 			run: {
 				isStreaming: session.isStreaming,
 				isBashRunning: session.isBashRunning,

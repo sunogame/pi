@@ -77,9 +77,15 @@ export const ATTACH_LOCAL_COMMANDS: SlashCommand[] = [
 	{ name: "model", description: "Select model for the attached runtime" },
 	{ name: "compact", description: "Compact the attached runtime context" },
 	{ name: "reload", description: "Reload the attached runtime resources" },
+	{ name: "load-more", description: "Load older transcript entries" },
+	{ name: "more", description: "Load older transcript entries" },
 	{ name: "abort", description: "Abort the current runtime run" },
 	{ name: "quit", description: "Detach this TUI" },
 ];
+const ATTACH_TRANSCRIPT_BYTE_LIMIT = 200_000;
+const ATTACH_TRANSCRIPT_ENTRY_LIMIT = 300;
+const TRANSCRIPT_PAGE_BYTE_LIMIT = 200_000;
+const TRANSCRIPT_PAGE_ENTRY_LIMIT = 150;
 
 export async function runRuntimeAttachMode(
 	args: readonly string[] = process.argv.slice(2),
@@ -113,7 +119,7 @@ async function createRuntimeAttachConnection(
 		}
 		const entry = readRuntimeRegistryEntry(options.agentDir, options.attach);
 		if (!entry) {
-			throw new Error(`No running runtime registered as "${options.attach}"`);
+			throw new Error(formatRuntimeNotFound(options.agentDir, options.attach));
 		}
 		let transport: RuntimeTransport;
 		try {
@@ -177,6 +183,7 @@ class RuntimeAttachView {
 	private readonly localToolDefinitions = new Map<string, ToolDefinition>();
 	private unsubscribeStore?: () => void;
 	private finish?: () => void;
+	private suppressNextSnapshotHistoryPopulate = false;
 
 	constructor(
 		tui: TUI,
@@ -283,7 +290,10 @@ class RuntimeAttachView {
 			this.renderSnapshot(this.client.store.snapshot);
 
 			this.client
-				.attach()
+				.attach({
+					maxTranscriptBytes: ATTACH_TRANSCRIPT_BYTE_LIMIT,
+					maxTranscriptEntries: ATTACH_TRANSCRIPT_ENTRY_LIMIT,
+				})
 				.then(() => {
 					this.renderSnapshot(this.client.store.snapshot);
 				})
@@ -366,6 +376,10 @@ class RuntimeAttachView {
 		}
 		if (command.name === "reload") {
 			await this.reloadRuntime();
+			return true;
+		}
+		if (command.name === "load-more" || command.name === "more") {
+			await this.loadMoreTranscript();
 			return true;
 		}
 		if (command.name === "monitors") {
@@ -566,13 +580,16 @@ class RuntimeAttachView {
 		}
 		const entry = readRuntimeRegistryEntry(this.agentDir, runtimeId);
 		if (!entry) {
-			this.showStatusMessage(theme.fg("warning", `No running runtime registered as "${runtimeId}"`));
+			this.showStatusMessage(theme.fg("warning", formatRuntimeNotFound(this.agentDir, runtimeId)));
 			return;
 		}
 		try {
 			const transport = await connectRuntimeSocket(entry.socketPath);
 			const nextClient = createIpcRuntimeClient(transport, createPlaceholderSnapshot(entry.cwd));
-			await nextClient.attach();
+			await nextClient.attach({
+				maxTranscriptBytes: ATTACH_TRANSCRIPT_BYTE_LIMIT,
+				maxTranscriptEntries: ATTACH_TRANSCRIPT_ENTRY_LIMIT,
+			});
 			this.unsubscribeStore?.();
 			this.unsubscribeStore = undefined;
 			this.client.close();
@@ -609,6 +626,34 @@ class RuntimeAttachView {
 		);
 		const nextIndex = (currentIndex + direction + entries.length) % entries.length;
 		await this.switchRuntime(entries[nextIndex].agentId);
+	}
+
+	private async loadMoreTranscript(): Promise<void> {
+		const transcript = this.client.store.snapshot.transcript;
+		if (!transcript.hasMoreBefore) {
+			this.showStatusMessage(theme.fg("muted", "No older transcript entries to load."));
+			return;
+		}
+		try {
+			this.suppressNextSnapshotHistoryPopulate = true;
+			const page = await this.client.loadTranscriptBefore({
+				beforeEntryId: transcript.oldestLoadedEntryId,
+				maxBytes: TRANSCRIPT_PAGE_BYTE_LIMIT,
+				maxEntries: TRANSCRIPT_PAGE_ENTRY_LIMIT,
+			});
+			if (page.entries.length === 0) {
+				this.showStatusMessage(theme.fg("muted", "No older transcript entries to load."));
+				return;
+			}
+			const shown = this.client.store.snapshot.transcript.entries.length;
+			const total = this.client.store.snapshot.transcript.totalEntries ?? shown;
+			this.showStatusMessage(
+				theme.fg("muted", `Loaded ${page.entries.length} older transcript entries (${shown}/${total}).`),
+			);
+		} catch (error) {
+			this.suppressNextSnapshotHistoryPopulate = false;
+			this.setError(error);
+		}
 	}
 
 	private showRuntimeList(): void {
@@ -652,10 +697,10 @@ class RuntimeAttachView {
 		this.renderStatus(this.client.store.snapshot);
 	}
 
-	private renderSnapshot(snapshot: AgentRuntimeSnapshot): void {
+	private renderSnapshot(snapshot: AgentRuntimeSnapshot, options: { populateHistory?: boolean } = {}): void {
 		this.header.renderSnapshot(snapshot);
 		this.renderStatus(snapshot);
-		this.transcript.renderSnapshot(snapshot, { populateHistory: true });
+		this.transcript.renderSnapshot(snapshot, { populateHistory: options.populateHistory ?? true });
 		this.pendingMessages.renderSnapshot(snapshot);
 	}
 
@@ -900,7 +945,9 @@ class RuntimeAttachView {
 			if (event) {
 				this.handleRuntimeEvent(event, snapshot);
 			} else {
-				this.transcript.renderSnapshot(snapshot, { populateHistory: true });
+				const populateHistory = !this.suppressNextSnapshotHistoryPopulate;
+				this.suppressNextSnapshotHistoryPopulate = false;
+				this.transcript.renderSnapshot(snapshot, { populateHistory });
 			}
 		});
 	}
@@ -1256,6 +1303,15 @@ function createPlaceholderSnapshot(cwd: string): AgentRuntimeSnapshot {
 		},
 		commands: [],
 	};
+}
+
+function formatRuntimeNotFound(agentDir: string, runtimeId: string): string {
+	const entries = listRuntimeRegistryEntries(agentDir);
+	if (entries.length === 0) {
+		return `No running runtime registered as "${runtimeId}". Start runtimes with: ${APP_NAME} supervisor start`;
+	}
+	const ids = entries.map((entry) => entry.agentId).sort();
+	return `No running runtime registered as "${runtimeId}". Available runtimes: ${ids.join(", ")}`;
 }
 
 export async function broadcastToRuntimeEntries(
