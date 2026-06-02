@@ -279,6 +279,7 @@ export class TUI extends Container {
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
 	private cursorRow = 0; // Logical cursor row (end of rendered content)
 	private hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
+	private hardwareCursorCol: number | undefined = undefined; // Undefined after render output leaves column unknown
 	private showHardwareCursor = process.env.PI_HARDWARE_CURSOR === "1";
 	private clearOnShrink = process.env.PI_CLEAR_ON_SHRINK === "1"; // Clear empty rows when content shrinks (default: off)
 	private maxLinesRendered = 0; // Track terminal's working area (max lines ever rendered)
@@ -659,6 +660,7 @@ export class TUI extends Container {
 			this.previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
 			this.cursorRow = 0;
 			this.hardwareCursorRow = 0;
+			this.hardwareCursorCol = undefined;
 			this.maxLinesRendered = 0;
 			this.previousViewportTop = 0;
 			if (this.renderTimer) {
@@ -1169,6 +1171,7 @@ export class TUI extends Container {
 			this.terminal.write(buffer);
 			this.cursorRow = Math.max(0, newLines.length - 1);
 			this.hardwareCursorRow = this.cursorRow;
+			this.hardwareCursorCol = undefined;
 			// Reset max lines when clearing, otherwise track growth
 			if (clear) {
 				this.maxLinesRendered = newLines.length;
@@ -1296,6 +1299,7 @@ export class TUI extends Container {
 				this.terminal.write(buffer);
 				this.cursorRow = targetRow;
 				this.hardwareCursorRow = targetRow;
+				this.hardwareCursorCol = undefined;
 			}
 			this.positionHardwareCursor(cursorPos, newLines.length);
 			this.previousLines = newLines;
@@ -1440,6 +1444,7 @@ export class TUI extends Container {
 		// hardwareCursorRow tracks actual terminal cursor position (for movement)
 		this.cursorRow = Math.max(0, newLines.length - 1);
 		this.hardwareCursorRow = finalCursorRow;
+		this.hardwareCursorCol = undefined;
 		// Track terminal's working area (grows but doesn't shrink unless cleared)
 		this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
 		this.previousViewportTop = Math.max(prevViewportTop, finalCursorRow - height + 1);
@@ -1476,14 +1481,18 @@ export class TUI extends Container {
 		} else if (rowDelta < 0) {
 			buffer += `\x1b[${-rowDelta}A`; // Move up
 		}
-		// Move to absolute column (1-indexed)
-		buffer += `\x1b[${targetCol + 1}G`;
+		// Move to absolute column (1-indexed). Skip only when no render output
+		// invalidated the terminal's actual column since the last positioning.
+		if (this.hardwareCursorCol !== targetCol) {
+			buffer += `\x1b[${targetCol + 1}G`;
+		}
 
 		if (buffer) {
 			this.terminal.write(buffer);
 		}
 
 		this.hardwareCursorRow = targetRow;
+		this.hardwareCursorCol = targetCol;
 		if (this.showHardwareCursor) {
 			this.terminal.showCursor();
 		} else {

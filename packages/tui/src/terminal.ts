@@ -112,6 +112,7 @@ export class ProcessTerminal implements Terminal {
 	private stdinBuffer?: StdinBuffer;
 	private stdinDataHandler?: (data: string) => void;
 	private progressInterval?: ReturnType<typeof setInterval>;
+	private cursorVisible: boolean | undefined;
 	private writeLogPath = (() => {
 		const env = process.env.PI_TUI_WRITE_LOG || "";
 		if (!env) return "";
@@ -134,6 +135,7 @@ export class ProcessTerminal implements Terminal {
 	start(onInput: (data: string) => void, onResize: () => void): void {
 		this.inputHandler = onInput;
 		this.resizeHandler = onResize;
+		this.cursorVisible = undefined;
 
 		// Save previous state and enable raw mode
 		this.wasRaw = process.stdin.isRaw || false;
@@ -524,11 +526,15 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	hideCursor(): void {
+		if (this.cursorVisible === false) return;
 		process.stdout.write("\x1b[?25l");
+		this.cursorVisible = false;
 	}
 
 	showCursor(): void {
+		if (this.cursorVisible === true) return;
 		process.stdout.write("\x1b[?25h");
+		this.cursorVisible = true;
 	}
 
 	clearLine(): void {

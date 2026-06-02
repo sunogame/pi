@@ -22,6 +22,28 @@ describe("normalizeAppleTerminalInput", () => {
 	});
 });
 
+describe("ProcessTerminal cursor visibility", () => {
+	it("deduplicates repeated cursor visibility writes", () => {
+		const terminal = new ProcessTerminal();
+		const writes: string[] = [];
+		const previousWrite = process.stdout.write;
+		process.stdout.write = ((chunk: string | Uint8Array) => {
+			writes.push(String(chunk));
+			return true;
+		}) as typeof process.stdout.write;
+		try {
+			terminal.hideCursor();
+			terminal.hideCursor();
+			terminal.showCursor();
+			terminal.showCursor();
+
+			assert.deepEqual(writes, ["\x1b[?25l", "\x1b[?25h"]);
+		} finally {
+			process.stdout.write = previousWrite;
+		}
+	});
+});
+
 describe("ProcessTerminal Kitty keyboard protocol negotiation", () => {
 	type NegotiationHarness = {
 		terminal: ProcessTerminal;
